@@ -25,7 +25,18 @@ Na primeira vez, clique no status no canto superior direito e informe a **Server
 
 Para publicar no Railway, siga o [DEPLOY.md](DEPLOY.md).
 
-> Se o painel ficar acessível pela internet, defina `APP_PASSWORD` no `.env`. Sem essa senha, qualquer pessoa com o endereço consegue enviar mensagens pelo seu número.
+### Login
+
+Defina a senha do administrador no `.env`:
+
+```bash
+ADMIN_USER=admin          # opcional, padrão "admin"
+ADMIN_PASSWORD=uma-senha-forte
+```
+
+O painel abre numa tela de login (usuário `admin` + essa senha). A sessão fica num cookie seguro (`HttpOnly`) por 12 h, ou 30 dias com “Manter conectado”. Depois de 10 senhas erradas em 15 min, o login é bloqueado temporariamente. Trocar a senha no `.env` encerra todas as sessões. Ficam fora do login apenas `/api/health` e o webhook da uazapi, que valida o próprio token.
+
+> Sem `ADMIN_PASSWORD`, o painel fica **sem login** (o log avisa). Não publique assim: qualquer pessoa com o endereço conseguiria enviar mensagens pelo seu número.
 
 ## CSV
 
@@ -112,7 +123,9 @@ Envie apenas para contatos que autorizaram receber mensagens. Comece com volumes
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/health` | healthcheck (sem senha) |
+| GET | `/api/health` | healthcheck (sem login) |
+| GET | `/api/auth/me` | sessão atual |
+| POST | `/api/auth/login` · `/api/auth/logout` | entrar (`{ username, password, remember }`) / sair |
 | GET/PUT | `/api/config` | URL/token da uazapi (o token nunca é devolvido inteiro) |
 | GET | `/api/instance` | status da instância (`/instance/status`) |
 | POST | `/api/uploads` | envia mídia (base64) e retorna `id` |

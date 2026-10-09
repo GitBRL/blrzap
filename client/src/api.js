@@ -6,11 +6,16 @@ async function request(path, { method = 'GET', body } = {}) {
   })
   if (res.status === 204) return null
   const data = await res.json().catch(() => ({}))
+  // Sessão expirada: avisa o App para mostrar a tela de login
+  if (res.status === 401 && !path.startsWith('/auth/')) window.dispatchEvent(new Event('auth:expired'))
   if (!res.ok) throw new Error(data.error || `Erro ${res.status}`)
   return data
 }
 
 export const api = {
+  me: () => request('/auth/me'),
+  login: (body) => request('/auth/login', { method: 'POST', body }),
+  logout: () => request('/auth/logout', { method: 'POST' }),
   config: () => request('/config'),
   saveConfig: (body) => request('/config', { method: 'PUT', body }),
   instance: () => request('/instance'),

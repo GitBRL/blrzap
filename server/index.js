@@ -1,13 +1,24 @@
 import { DATA_DIR, ON_RAILWAY, ROOT } from './env.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import crypto from 'node:crypto'
 import express from 'express'
 import Papa from 'papaparse'
 import { normalizePhone } from '../shared/phone.js'
 import { publicConfig, setConfig } from './config.js'
 import { flushAll, getCampaign, listCampaigns, loadCampaigns, removeCampaign, saveUpload } from './store.js'
 import { instanceStatus, UazapiError } from './uazapi.js'
+import {
+  ADMIN_USER,
+  authEnabled,
+  checkCredentials,
+  clearFailures,
+  currentUser,
+  endSession,
+  loginBlockedFor,
+  registerFailure,
+  requireAuth,
+  startSession,
+} from './auth.js'
 import { listenerStatus, restartListener, startListener, webhookHandler } from './events.js'
 import {
   createTestSession,
@@ -43,6 +54,8 @@ const app = express()
 const PORT = Number(process.env.PORT) || 3001
 
 app.disable('x-powered-by')
+// Atrás do proxy do Railway: usa o IP real e reconhece HTTPS (cookie Secure)
+if (ON_RAILWAY || process.env.TRUST_PROXY) app.set('trust proxy', 1)
 app.use(express.json({ limit: '64mb' }))
 
 // Healthcheck (Railway): fora da senha do painel
@@ -51,18 +64,38 @@ app.get('/api/health', (req, res) => res.json({ ok: true, uptime: Math.round(pro
 // Webhook da uazapi (opcional): autenticado pelo token da instância no payload, fora da senha do painel
 app.post('/api/webhook/uazapi', webhookHandler)
 
-// Senha opcional (APP_PASSWORD no .env) — recomendada se o painel ficar exposto na internet
-const APP_PASSWORD = process.env.APP_PASSWORD
-if (APP_PASSWORD) {
-  const expected = crypto.createHash('sha256').update(APP_PASSWORD).digest()
-  app.use((req, res, next) => {
-    const [scheme, encoded = ''] = (req.headers.authorization || '').split(' ')
-    const decoded = Buffer.from(encoded, 'base64').toString()
-    const given = crypto.createHash('sha256').update(decoded.slice(decoded.indexOf(':') + 1)).digest()
-    if (scheme === 'Basic' && crypto.timingSafeEqual(given, expected)) return next()
-    res.set('WWW-Authenticate', 'Basic realm="Disparos", charset="UTF-8"').status(401).send('Autenticação necessária')
-  })
-}
+// ---- Login (usuário admin + ADMIN_PASSWORD do .env) ---------------------------------------
+
+app.get('/api/auth/me', (req, res) => {
+  const user = currentUser(req)
+  res.json({ authEnabled, authenticated: !authEnabled || Boolean(user), user: authEnabled ? user : null })
+})
+
+app.post('/api/auth/login', (req, res) => {
+  if (!authEnabled) return res.json({ ok: true, user: null })
+  const ip = req.ip
+  const wait = loginBlockedFor(ip)
+  if (wait) {
+    res.set('Retry-After', String(wait))
+    return res.status(429).json({ error: `Muitas tentativas. Tente novamente em ${Math.ceil(wait / 60)} min.` })
+  }
+  const { username, password, remember } = req.body || {}
+  if (!checkCredentials(username, password)) {
+    registerFailure(ip)
+    return res.status(401).json({ error: 'Usuário ou senha incorretos.' })
+  }
+  clearFailures(ip)
+  startSession(req, res, ADMIN_USER, Boolean(remember))
+  res.json({ ok: true, user: ADMIN_USER })
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  endSession(req, res)
+  res.json({ ok: true })
+})
+
+// Todo o restante da API exige login (o frontend estático é público: só tem a tela de login)
+app.use('/api', requireAuth)
 
 const api = express.Router()
 
@@ -334,8 +367,10 @@ app.listen(PORT, () => {
   if (ON_RAILWAY && !process.env.RAILWAY_VOLUME_MOUNT_PATH && !process.env.DATA_DIR) {
     console.warn('⚠ Nenhum volume anexado: campanhas e configurações serão perdidas a cada deploy. Veja o DEPLOY.md.')
   }
-  if (ON_RAILWAY && !APP_PASSWORD) {
-    console.warn('⚠ APP_PASSWORD não definida: o painel está público e qualquer pessoa pode disparar mensagens.')
+  if (!authEnabled) {
+    console.warn('⚠ ADMIN_PASSWORD não definida no .env: o painel está SEM login e qualquer pessoa com o endereço pode disparar.')
+  } else {
+    console.log(`Login ativo para o usuário "${ADMIN_USER}".`)
   }
   kick()
   startScheduler()

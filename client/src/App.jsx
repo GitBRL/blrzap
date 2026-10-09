@@ -1,12 +1,50 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, Megaphone, Settings } from 'lucide-react'
+import { History, LogOut, Megaphone, Settings } from 'lucide-react'
 import { api } from './api.js'
 import InstanceStatus from './components/InstanceStatus.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import NewCampaign from './components/NewCampaign.jsx'
 import Campaigns from './components/Campaigns.jsx'
+import Login from './components/Login.jsx'
 
 export default function App() {
+  const [auth, setAuth] = useState(null) // { authEnabled, authenticated, user, expired? }
+
+  useEffect(() => {
+    api
+      .me()
+      .then(setAuth)
+      .catch(() => setAuth({ authEnabled: true, authenticated: false }))
+    const onExpired = () => setAuth((a) => (a?.authenticated && a.authEnabled ? { ...a, authenticated: false, expired: true } : a))
+    window.addEventListener('auth:expired', onExpired)
+    return () => window.removeEventListener('auth:expired', onExpired)
+  }, [])
+
+  if (!auth) return <div className="boot muted">Carregando…</div>
+
+  const onLogin = (user) => setAuth({ authEnabled: true, authenticated: true, user })
+
+  if (auth.authEnabled && !auth.authenticated && !auth.expired) return <Login onSuccess={onLogin} />
+
+  const logout = async () => {
+    await api.logout().catch(() => {})
+    setAuth({ authEnabled: true, authenticated: false })
+  }
+
+  return (
+    <>
+      <Dashboard user={auth.authEnabled ? auth.user : null} onLogout={logout} />
+      {/* Sessão expirada: login por cima do painel, sem perder o que estava na tela */}
+      {auth.expired && !auth.authenticated && (
+        <div className="login-overlay">
+          <Login expired onSuccess={onLogin} />
+        </div>
+      )}
+    </>
+  )
+}
+
+function Dashboard({ user, onLogout }) {
   const [tab, setTab] = useState('new')
   const [selectedId, setSelectedId] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -69,6 +107,16 @@ export default function App() {
           <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Configurações da uazapi" aria-label="Configurações">
             <Settings size={18} />
           </button>
+          {user && (
+            <div className="user-menu">
+              <span className="user-name" title="Usuário conectado">
+                {user}
+              </span>
+              <button className="icon-btn" onClick={onLogout} title="Sair" aria-label="Sair">
+                <LogOut size={18} />
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
