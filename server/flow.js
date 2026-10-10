@@ -130,7 +130,9 @@ export function interestPayload({ flow, key, text, file, media }) {
   if (flow.footer) payload.footerText = flow.footer
   if (file) {
     payload.file = file
-    if (media.mimetype) payload.mimetype = media.mimetype
+    // Sem `mimetype` a uazapi tenta adivinhar o tipo do cabeçalho (e descarta a mídia em silêncio
+    // quando não consegue). `image`, `video` e `document` são valores aceitos pela API.
+    payload.mimetype = media.mimetype || media.type
     if (media.type === 'document') payload.docName = media.fileName || 'documento'
   }
   return payload
