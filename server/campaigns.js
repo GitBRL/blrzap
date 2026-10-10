@@ -104,6 +104,28 @@ export function normalizeMedia(media) {
 }
 
 /**
+ * Arquivo no formato que a uazapi espera em `file`: a URL informada, ou o upload como
+ * Data URI. O Data URI leva o tipo do arquivo junto, então a API não precisa adivinhá-lo
+ * pelo início do base64 — sem isso a mídia pode ser descartada no envio com botões.
+ */
+function mediaFile(media) {
+  if (!media.uploadId) return media.url
+  const base64 = readUpload(media.uploadId)
+  if (!base64 || /^data:/i.test(base64)) return base64
+  // Sem o tipo do navegador, vai o base64 puro: a uazapi reconhece o arquivo pelo início dele
+  return media.mimetype ? `data:${media.mimetype};base64,${base64}` : base64
+}
+
+/** A uazapi responde 200 mesmo quando o WhatsApp recusou a mensagem: o erro vem no corpo. */
+function sendFailure(res) {
+  if (!res || typeof res !== 'object') return null
+  const error = typeof res.error === 'string' ? res.error.trim() : ''
+  if (error) return `A uazapi recusou a mensagem: ${error}`
+  if (res.status === 'Failed') return 'A uazapi não conseguiu enviar a mensagem (status "Failed").'
+  return null
+}
+
+/**
  * Monta o payload e envia uma mensagem (texto, mídia ou botões de interesse).
  * Repete em caso de 429. `flowKey` identifica a campanha nos IDs dos botões.
  */
@@ -116,7 +138,7 @@ export async function deliver({ number, template, vars, media, settings, flow, f
 
   let file = null
   if (media) {
-    file = media.uploadId ? readUpload(media.uploadId) : media.url
+    file = mediaFile(media)
     if (!file) throw new UazapiError('Arquivo de mídia não encontrado no servidor.', { kind: 'config' })
   }
 
@@ -134,6 +156,8 @@ export async function deliver({ number, template, vars, media, settings, flow, f
   for (let attempt = 1; ; attempt++) {
     try {
       const res = flow ? await sendMenu(payload) : media ? await sendMedia(payload) : await sendText(payload)
+      const failure = sendFailure(res)
+      if (failure) throw new UazapiError(failure, { data: res })
       return { text, messageId: res?.messageid || res?.id || null }
     } catch (err) {
       // 429 = limite de requisições: a mensagem não foi aceita, então é seguro repetir
