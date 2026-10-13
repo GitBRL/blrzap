@@ -5,10 +5,10 @@ import { detectPhoneColumn, prepareContacts } from '@shared/phone.js'
 import { DEFAULT_WINDOW } from '@shared/schedule.js'
 import { autoMapFields, DEFAULT_DATA_STEP, DEFAULT_WEBHOOK } from '@shared/datafields.js'
 import { api } from '../api.js'
-import { browserTimeZone, formatWhen, nextFullHour, readAsBase64, storageGet, storageSet, toLocalInput } from '../utils.js'
+import { browserTimeZone, formatWhen, nextFullHour, storageGet, storageSet, toLocalInput } from '../utils.js'
 import CsvImport from './CsvImport.jsx'
 import TemplateEditor from './TemplateEditor.jsx'
-import MediaPicker, { EMPTY_MEDIA } from './MediaPicker.jsx'
+import MediaPicker, { EMPTY_MEDIA, mediaProblem } from './MediaPicker.jsx'
 import SendSettings from './SendSettings.jsx'
 import MessagePreview from './MessagePreview.jsx'
 import FlowEditor, { DEFAULT_FLOW, flowProblems } from './FlowEditor.jsx'
@@ -124,13 +124,10 @@ export default function NewCampaign({ instance, onCreated }) {
       return { type: media.type, url: media.url.trim(), fileName: media.url.split('/').pop() }
     }
     if (!media.file) throw new Error('Escolha o arquivo de mídia ou remova o anexo.')
-    let uploadId = media.uploadId
-    if (!uploadId) {
-      const base64 = await readAsBase64(media.file)
-      ;({ id: uploadId } = await api.upload({ base64, mimetype: media.file.type, fileName: media.file.name }))
-      setMedia((m) => ({ ...m, uploadId }))
-    }
-    return { type: media.type, uploadId, fileName: media.file.name, mimetype: media.file.type }
+    // O arquivo já foi enviado em partes ao ser escolhido (MediaPicker)
+    const problem = mediaProblem(media)
+    if (problem) throw new Error(problem)
+    return { type: media.type, uploadId: media.uploadId, fileName: media.file.name, mimetype: media.file.type }
   }
 
   const flowPayload = flow.enabled ? flow : null
@@ -146,6 +143,8 @@ export default function NewCampaign({ instance, onCreated }) {
   const w = settings.window
   if (w.enabled && (!w.days.length || !w.start || !w.end || w.end <= w.start)) problems.push('Ajuste a janela de envio.')
   if (media.mode === 'file' && !media.file) problems.push('Escolha o arquivo de mídia.')
+  const uploadProblem = mediaProblem(media)
+  if (uploadProblem) problems.push(uploadProblem)
   if (media.mode === 'url' && !media.url.trim()) problems.push('Informe a URL da mídia.')
   if (instance && !instance.configured) problems.push('Configure a conexão com a uazapi.')
 
@@ -252,7 +251,7 @@ export default function NewCampaign({ instance, onCreated }) {
           )}
           <TemplateEditor template={template} setTemplate={setTemplate} headers={csv?.headers || []} />
           <h3 className="subhead">{flow.enabled ? 'Imagem no topo da mensagem' : 'Anexo'}</h3>
-          <MediaPicker media={media} setMedia={setMedia} allowAudio={!flow.enabled} />
+          <MediaPicker media={media} setMedia={setMedia} allowAudio={!flow.enabled} server={instance?.server} />
         </Section>
 
         {flow.enabled && (
@@ -276,6 +275,9 @@ export default function NewCampaign({ instance, onCreated }) {
           template={template}
           media={media}
           flow={flowPayload}
+          separateMedia={Boolean(
+            flowPayload && ['video', 'document'].includes(media.type) && instance?.server?.version && !instance.server.buttonMedia,
+          )}
           contacts={validContacts}
           index={safeIndex}
           setIndex={setPreviewIndex}

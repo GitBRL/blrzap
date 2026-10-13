@@ -13,12 +13,21 @@ import {
   nextWindowStart,
   normalizeWindow,
 } from '../shared/schedule.js'
-import { addCampaign, appendLog as log, getCampaign, listCampaigns, readUpload, saveCampaign } from './store.js'
-import { checkNumbers, fatalReason, sendMedia, sendMenu, sendText, UazapiError } from './uazapi.js'
+import { addCampaign, appendLog as log, getCampaign, listCampaigns, readUploadBase64, saveCampaign, uploadInfo } from './store.js'
+import { checkNumbers, fatalReason, sendMedia, sendMenu, sendText, supportsButtonMedia, UazapiError } from './uazapi.js'
+import { publicBaseUrl } from './env.js'
 import { ValidationError } from './errors.js'
 import { flowCounts, interestPayload, normalizeFlow } from './flow.js'
 
 export const MEDIA_TYPES = ['image', 'video', 'document', 'audio', 'ptt']
+
+const MB = 1024 * 1024
+/** Limite por tipo de anexo. */
+export const MEDIA_LIMITS = { video: 512 * MB, document: 512 * MB, image: 32 * MB, audio: 32 * MB, ptt: 32 * MB }
+/** Sem endereço público, o arquivo vai em base64 dentro da requisição: só até este tamanho. */
+export const INLINE_MAX_BYTES = 45 * MB
+
+const mb = (bytes) => `${Math.round(bytes / MB)} MB`
 
 const DEFAULT_SETTINGS = {
   minDelay: 8, // segundos entre mensagens
@@ -93,7 +102,14 @@ export function normalizeMedia(media) {
   if (!MEDIA_TYPES.includes(media.type)) throw new ValidationError('Tipo de mídia inválido.')
   const out = { type: media.type, fileName: String(media.fileName || '').slice(0, 200), mimetype: media.mimetype || '' }
   if (media.uploadId) {
-    if (!readUpload(media.uploadId)) throw new ValidationError('Arquivo de mídia não encontrado. Envie o arquivo novamente.')
+    const info = uploadInfo(media.uploadId)
+    if (!info?.complete) throw new ValidationError('Arquivo de mídia não encontrado ou incompleto. Envie o arquivo novamente.')
+    if (info.size > MEDIA_LIMITS[media.type]) throw new ValidationError(`O limite para este tipo de anexo é ${mb(MEDIA_LIMITS[media.type])}.`)
+    if (!publicBaseUrl() && info.size > INLINE_MAX_BYTES) {
+      throw new ValidationError(
+        `Arquivos acima de ${mb(INLINE_MAX_BYTES)} precisam que o painel tenha um endereço público (Railway ou PUBLIC_URL).`,
+      )
+    }
     out.uploadId = media.uploadId
   } else if (media.url && /^https?:\/\//i.test(media.url)) {
     out.url = media.url.trim()
@@ -110,7 +126,18 @@ export function normalizeMedia(media) {
  */
 function mediaFile(media) {
   if (!media.uploadId) return media.url
-  const base64 = readUpload(media.uploadId)
+  const info = uploadInfo(media.uploadId)
+  if (!info?.complete) return null
+  // Com endereço público, a uazapi baixa o arquivo por link (necessário para vídeos grandes)
+  const base = publicBaseUrl()
+  if (base && info.kind === 'bin') {
+    const name = encodeURIComponent(String(info.fileName || 'arquivo').replace(/[\\/]/g, '_'))
+    return `${base}/media/${media.uploadId}/${name}`
+  }
+  if (info.size > INLINE_MAX_BYTES) {
+    throw new UazapiError(`Arquivo de ${mb(info.size)} precisa de endereço público (Railway ou PUBLIC_URL) para ser enviado.`, { kind: 'config' })
+  }
+  const base64 = readUploadBase64(media.uploadId)
   if (!base64 || /^data:/i.test(base64)) return base64
   // Sem o tipo do navegador, vai o base64 puro: a uazapi reconhece o arquivo pelo início dele
   return media.mimetype ? `data:${media.mimetype};base64,${base64}` : base64
@@ -143,29 +170,48 @@ export async function deliver({ number, template, vars, media, settings, flow, f
   }
 
   let payload
+  let preMedia = null // mídia enviada antes dos botões (uazapi < 2.6 não aceita vídeo/documento no botão)
   if (flow) {
-    payload = { ...common, ...interestPayload({ flow, key: flowKey, text, file, media }) }
+    const separate = Boolean(media) && media.type !== 'image' && !(await supportsButtonMedia())
+    if (separate) preMedia = { ...common, ...mediaBody(media, file) }
+    payload = { ...common, ...interestPayload({ flow, key: flowKey, text, file, media, headerMedia: !separate }) }
+    if (separate) payload.delay = 1000
   } else if (media) {
-    payload = { ...common, type: media.type, file, text: text || undefined }
-    if (media.mimetype) payload.mimetype = media.mimetype
-    if (media.type === 'document') payload.docName = media.fileName || 'documento'
+    payload = { ...common, ...mediaBody(media, file), text: text || undefined }
   } else {
     payload = { ...common, text, linkPreview: settings.linkPreview || undefined }
   }
 
+  try {
+    if (preMedia) await sendChecked(sendMedia, preMedia)
+    const res = await sendChecked(flow ? sendMenu : media ? sendMedia : sendText, payload)
+    return { text, messageId: res?.messageid || res?.id || null }
+  } catch (err) {
+    err.renderedText = text
+    throw err
+  }
+}
+
+function mediaBody(media, file) {
+  const body = { type: media.type, file }
+  if (media.mimetype) body.mimetype = media.mimetype
+  if (media.type === 'document') body.docName = media.fileName || 'documento'
+  return body
+}
+
+/** Envia e confere a resposta. Repete em 429 (a mensagem não foi aceita, então é seguro). */
+async function sendChecked(send, payload) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = flow ? await sendMenu(payload) : media ? await sendMedia(payload) : await sendText(payload)
+      const res = await send(payload)
       const failure = sendFailure(res)
       if (failure) throw new UazapiError(failure, { data: res })
-      return { text, messageId: res?.messageid || res?.id || null }
+      return res
     } catch (err) {
-      // 429 = limite de requisições: a mensagem não foi aceita, então é seguro repetir
       if (err instanceof UazapiError && err.status === 429 && attempt < 5) {
         await sleep((err.retryAfter || 2 ** attempt) * 1000)
         continue
       }
-      err.renderedText = text
       throw err
     }
   }

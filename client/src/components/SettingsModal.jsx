@@ -96,6 +96,12 @@ export default function SettingsModal({ onClose, onSaved, instance }) {
               : instance.error || `Instância ${instance.state === 'connecting' ? 'conectando' : 'desconectada'}. Conecte o WhatsApp pelo painel da uazapi.`}
           </div>
         )}
+        {instance?.server?.version && (
+          <p className="muted small">
+            Versão da uazapi: <strong>{instance.server.version}</strong>
+            {!instance.server.buttonMedia && ' (vídeo e documento no topo de botões exigem 2.6 ou superior)'}
+          </p>
+        )}
         {error && <div className="callout bad">{error}</div>}
 
         <div className="modal-actions">

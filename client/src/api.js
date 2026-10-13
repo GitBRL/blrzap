@@ -19,7 +19,18 @@ export const api = {
   config: () => request('/config'),
   saveConfig: (body) => request('/config', { method: 'PUT', body }),
   instance: () => request('/instance'),
-  upload: (body) => request('/uploads', { method: 'POST', body }),
+  uploadInit: (body) => request('/uploads/init', { method: 'POST', body }),
+  uploadComplete: (id) => request(`/uploads/${id}/complete`, { method: 'POST' }),
+  /** Envia uma parte binária do arquivo (sem converter para base64). */
+  uploadChunk: async (id, index, blob) => {
+    const res = await fetch(`/api/uploads/${id}/chunks/${index}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: blob,
+    })
+    if (res.status === 401) window.dispatchEvent(new Event('auth:expired'))
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Erro ${res.status} no envio do arquivo`)
+  },
   testSend: (body) => request('/test-send', { method: 'POST', body }),
   campaigns: () => request('/campaigns'),
   campaign: (id) => request(`/campaigns/${id}`),

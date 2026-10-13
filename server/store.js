@@ -92,30 +92,104 @@ export function flushAll() {
 }
 
 // ---- Uploads de mídia -------------------------------------------------------
+//
+// Arquivos novos chegam em partes (upload em chunks) e ficam em binário: <id>.bin + <id>.json.
+// Uploads antigos, em base64 (<id>.b64), continuam funcionando para campanhas já criadas.
 
-const uploadCache = new Map()
+export const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+const ID_RE = /^[0-9a-f-]{36}$/
+const uploadPath = (id, ext) => path.join(UPLOADS_DIR, `${id}.${ext}`)
 
-function cacheUpload(id, base64) {
-  uploadCache.set(id, base64)
-  if (uploadCache.size > 10) uploadCache.delete(uploadCache.keys().next().value)
-}
-
-export function saveUpload({ base64, mimetype, fileName }) {
-  const id = crypto.randomUUID()
-  fs.writeFileSync(path.join(UPLOADS_DIR, `${id}.b64`), base64)
-  fs.writeFileSync(path.join(UPLOADS_DIR, `${id}.json`), JSON.stringify({ mimetype, fileName }))
-  cacheUpload(id, base64)
-  return id
-}
-
-export function readUpload(id) {
-  if (!/^[0-9a-f-]{36}$/.test(id)) return null
-  if (uploadCache.has(id)) return uploadCache.get(id)
+function readMeta(id) {
   try {
-    const base64 = fs.readFileSync(path.join(UPLOADS_DIR, `${id}.b64`), 'utf8')
-    cacheUpload(id, base64)
-    return base64
+    return JSON.parse(fs.readFileSync(uploadPath(id, 'json'), 'utf8'))
   } catch {
     return null
   }
+}
+
+/** Dados do upload: { kind: 'bin' | 'b64', fileName, mimetype, size, complete } ou null. */
+export function uploadInfo(id) {
+  if (!ID_RE.test(String(id))) return null
+  const meta = readMeta(id)
+  if (fs.existsSync(uploadPath(id, 'bin'))) return meta ? { kind: 'bin', ...meta } : null
+  if (fs.existsSync(uploadPath(id, 'b64'))) {
+    const size = Math.floor((fs.statSync(uploadPath(id, 'b64')).size * 3) / 4)
+    return { kind: 'b64', fileName: meta?.fileName || '', mimetype: meta?.mimetype || '', size, complete: true }
+  }
+  return null
+}
+
+export const uploadFilePath = (id) => uploadPath(id, 'bin')
+
+/** Cria um upload vazio; as partes são gravadas depois em suas posições. */
+export function createUpload({ fileName, mimetype, size }) {
+  const id = crypto.randomUUID()
+  fs.writeFileSync(uploadPath(id, 'bin'), '')
+  const meta = { fileName, mimetype, size, chunkSize: UPLOAD_CHUNK_SIZE, complete: false, createdAt: Date.now() }
+  fs.writeFileSync(uploadPath(id, 'json'), JSON.stringify(meta))
+  return { id, chunkSize: UPLOAD_CHUNK_SIZE }
+}
+
+/** Grava a parte `index` na posição certa (repetir a mesma parte é seguro). */
+export async function writeUploadChunk(id, index, buffer) {
+  const info = uploadInfo(id)
+  if (!info || info.kind !== 'bin') throw new Error('Upload não encontrado.')
+  if (info.complete) throw new Error('Upload já finalizado.')
+  const offset = index * info.chunkSize
+  const expected = Math.min(info.chunkSize, info.size - offset)
+  if (!Number.isInteger(index) || index < 0 || expected <= 0) throw new Error('Parte do arquivo inválida.')
+  if (buffer.length !== expected) throw new Error(`Parte ${index} com tamanho inesperado.`)
+  const handle = await fs.promises.open(uploadPath(id, 'bin'), 'r+')
+  try {
+    await handle.write(buffer, 0, buffer.length, offset)
+  } finally {
+    await handle.close()
+  }
+}
+
+export function completeUpload(id) {
+  const info = uploadInfo(id)
+  if (!info || info.kind !== 'bin') throw new Error('Upload não encontrado.')
+  const actual = fs.statSync(uploadPath(id, 'bin')).size
+  if (actual !== info.size) throw new Error(`Arquivo incompleto (${actual} de ${info.size} bytes). Envie novamente.`)
+  const { kind, ...meta } = info
+  fs.writeFileSync(uploadPath(id, 'json'), JSON.stringify({ ...meta, complete: true }))
+  return { id, size: actual }
+}
+
+// Cache só de arquivos pequenos em base64 (os grandes vão por link, sem passar pela memória)
+const base64Cache = new Map()
+const CACHE_MAX_BYTES = 8 * 1024 * 1024
+
+/** Conteúdo em base64 (para envio sem endereço público). */
+export function readUploadBase64(id) {
+  const info = uploadInfo(id)
+  if (!info?.complete) return null
+  if (base64Cache.has(id)) return base64Cache.get(id)
+  const base64 =
+    info.kind === 'b64' ? fs.readFileSync(uploadPath(id, 'b64'), 'utf8') : fs.readFileSync(uploadPath(id, 'bin')).toString('base64')
+  if (info.size <= CACHE_MAX_BYTES) {
+    base64Cache.set(id, base64)
+    if (base64Cache.size > 20) base64Cache.delete(base64Cache.keys().next().value)
+  }
+  return base64
+}
+
+/**
+ * Apaga uploads com mais de 24 h que nenhuma campanha usa (incompletos ou órfãos).
+ * Libera espaço no volume: vídeos podem ter centenas de MB.
+ */
+export function cleanupUploads(referenced) {
+  const cutoff = Date.now() - 24 * 3600_000
+  const ids = new Set(fs.readdirSync(UPLOADS_DIR).map((f) => f.split('.')[0]).filter((id) => ID_RE.test(id)))
+  let removed = 0
+  for (const id of ids) {
+    if (referenced.has(id)) continue
+    const files = ['bin', 'b64', 'json'].map((ext) => uploadPath(id, ext)).filter((f) => fs.existsSync(f))
+    if (files.some((f) => fs.statSync(f).mtimeMs > cutoff)) continue
+    for (const f of files) fs.rmSync(f, { force: true })
+    removed++
+  }
+  return removed
 }

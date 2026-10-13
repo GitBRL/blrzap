@@ -49,7 +49,7 @@ function Step({ children }) {
 }
 
 /** Sequência do fluxo de qualificação: botões → pergunta → resposta final. */
-function FlowPreview({ flow, media, text, vars, time, number }) {
+function FlowPreview({ flow, media, text, vars, time, number, separateMedia }) {
   const render = (tpl, extra = {}) => renderTemplate(tpl, { ...vars, ...extra }, seeded(1))
   const usesList = flow.options.length > 3
   const qualifiedOption = flow.options.find((o) => o.qualified && o.label.trim())
@@ -60,9 +60,14 @@ function FlowPreview({ flow, media, text, vars, time, number }) {
 
   return (
     <>
-      <div className="bubble-group">
+      {separateMedia && media.mode !== 'none' && (
         <Bubble time={time}>
           <MediaBlock media={media} />
+        </Bubble>
+      )}
+      <div className="bubble-group">
+        <Bubble time={time}>
+          {!separateMedia && <MediaBlock media={media} />}
           {text.trim() ? <Text text={text} /> : <span className="muted small">Escreva o texto da mensagem</span>}
           {flow.footer && <div className="bubble-footer">{flow.footer}</div>}
         </Bubble>
@@ -136,7 +141,7 @@ function FlowPreview({ flow, media, text, vars, time, number }) {
   )
 }
 
-export default function MessagePreview({ template, media, flow, contacts, index, setIndex, seed, onReshuffle }) {
+export default function MessagePreview({ template, media, flow, separateMedia, contacts, index, setIndex, seed, onReshuffle }) {
   const contact = contacts[index]
   // Sem CSV, mostra o nome das variáveis no lugar dos valores
   const vars = useMemo(
@@ -179,7 +184,7 @@ export default function MessagePreview({ template, media, flow, contacts, index,
 
       <div className="chat">
         {flow ? (
-          <FlowPreview flow={flow} media={media} text={text} vars={vars} time={now} number={contact?.number} />
+          <FlowPreview flow={flow} media={media} text={text} vars={vars} time={now} number={contact?.number} separateMedia={separateMedia} />
         ) : empty ? (
           <p className="chat-empty">A prévia da mensagem aparece aqui.</p>
         ) : (

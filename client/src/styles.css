@@ -1957,6 +1957,28 @@ textarea {
   padding: 0 4px;
 }
 
+.upload-bar {
+  display: block;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.upload-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.file-chip.error {
+  border-color: var(--bad);
+  background: var(--bad-soft);
+}
+
 /* ---------- Modal ---------- */
 
 .modal-backdrop {

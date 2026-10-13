@@ -64,6 +64,39 @@ async function request(path, { method = 'GET', body, timeout = 30_000 } = {}) {
 
 export const instanceStatus = () => request('/instance/status', { timeout: 15_000 })
 
+// ---- Versão do servidor (GET /status é público) ------------------------------------------
+
+let versionCache = { baseUrl: '', value: null, expires: 0 }
+
+/** Versão da uazapi em execução (ex.: "2.4.2"), com cache de 10 min. null se não conseguir ler. */
+export async function serverVersion() {
+  const { baseUrl } = getConfig()
+  if (!baseUrl) return null
+  if (versionCache.baseUrl === baseUrl && versionCache.expires > Date.now()) return versionCache.value
+  let value = null
+  try {
+    const res = await fetch(`${baseUrl}/status`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
+    if (res.ok) value = (await res.json())?.build?.version || null
+  } catch {
+    // sem versão: tratamos como servidor antigo (o caminho mais compatível)
+  }
+  versionCache = { baseUrl, value, expires: Date.now() + (value ? 10 * 60_000 : 60_000) }
+  return value
+}
+
+export function versionAtLeast(version, min) {
+  if (!version) return false
+  const a = String(version).split('.').map((n) => parseInt(n, 10) || 0)
+  const b = min.split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]
+  }
+  return true
+}
+
+/** Vídeo e documento no topo de botões só existem a partir da uazapi 2.6.0. */
+export const supportsButtonMedia = async () => versionAtLeast(await serverVersion(), '2.6.0')
+
 export const checkNumbers = (numbers) => request('/chat/check', { method: 'POST', body: { numbers }, timeout: 60_000 })
 
 export const sendText = (payload) =>

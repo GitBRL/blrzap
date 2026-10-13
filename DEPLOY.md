@@ -8,7 +8,8 @@ Este guia coloca o painel de disparos no ar no [Railway](https://railway.com). O
 |---|---|---|
 | Serviço | 1 serviço Node.js (detectado automaticamente) | build `npm ci` → `npm run build`, início `npm start` |
 | Node | 24 (definido em `package.json` → `engines`) | versão testada |
-| **Volume** | montado em `/data` | campanhas, mídias e configuração da uazapi ficam salvas entre deploys |
+| **Volume** | montado em `/data` | campanhas, mídias (vídeos de até 512 MB) e configuração da uazapi ficam salvas entre deploys |
+| Domínio público | gerado em Networking | a uazapi baixa as mídias por ele (obrigatório para arquivos acima de 45 MB) |
 | **`ADMIN_PASSWORD`** | senha forte | senha do usuário `admin` na tela de login; sem ela o painel fica aberto |
 | Healthcheck | `/api/health` | o Railway só libera o tráfego quando o app responde |
 | Réplicas | **1** | o envio e o recebimento de respostas rodam em memória; 2 réplicas enviariam em dobro |
@@ -65,6 +66,7 @@ Na aba **Variables** do serviço:
 | `ADMIN_PASSWORD` | **sim** | senha longa e aleatória do usuário administrador (tela de login). |
 | `ADMIN_USER` | não | nome do usuário no login. Padrão: `admin`. |
 | `SESSION_SECRET` | não | segredo das sessões. Se vazio, é gerado e salvo no volume (`/data/session.key`). |
+| `PUBLIC_URL` | não | endereço público do painel, se usar domínio próprio. Sem ela, o app usa o domínio gerado pelo Railway (`RAILWAY_PUBLIC_DOMAIN`). |
 | `UAZAPI_URL` | não | `https://seusubdominio.uazapi.com`. Também pode ser configurada pela tela. |
 | `UAZAPI_TOKEN` | não | token **da instância** (não o admintoken). Também pode ser configurado pela tela. |
 
@@ -72,7 +74,7 @@ Não defina `PORT`: o Railway define sozinho. O que for salvo pela tela de confi
 
 ## 4. Ajustes do serviço (aba Settings)
 
-1. **Networking → Generate Domain**: gera o endereço público `https://xxxx.up.railway.app`.
+1. **Networking → Generate Domain**: gera o endereço público `https://xxxx.up.railway.app`. Além de abrir o painel, é por ele que a uazapi **baixa as mídias** dos disparos. Ao subir, o log mostra `Mídias servidas em https://…/media/…`.
 2. **Deploy → Healthcheck Path**: `/api/health`. Essa rota não pede login.
 3. **Deploy → Serverless**: **desligado**.
 4. **Réplicas**: mantenha **1**.
@@ -99,15 +101,21 @@ Depois de mudar configurações, faça um novo deploy (**Deploy → Redeploy**) 
 - **Queda inesperada (crash, falta de memória):** como o último envio pode não ter sido registrado, a campanha fica **pausada** com um aviso. Confira os contatos e clique em **Retomar**.
 - **Durante os segundos de deploy**, cliques nos botões feitos pelos contatos não são recebidos. Prefira publicar atualizações fora do horário das campanhas. O contato também pode responder digitando (por exemplo, "1" ou "sim").
 
-## 8. Fuso horário
+## 8. Vídeos grandes, espaço e tráfego
+
+- Vídeos e documentos podem ter até **512 MB**. O upload é feito em partes direto para o volume, sem pesar na memória: nos testes, 512 MB usaram menos de 170 MB de RAM.
+- **Espaço:** cada arquivo ocupa o próprio tamanho no volume. Confira o tamanho do volume no seu plano. Arquivos sem uso são apagados após 24 h, e excluir campanhas antigas libera o espaço dos vídeos delas.
+- **Tráfego (custo):** a uazapi baixa o arquivo do painel **a cada contato**. Um vídeo de 500 MB para 1.000 contatos gera ~500 GB de saída, e o Railway cobra por tráfego de saída. Para campanhas grandes, comprima o vídeo ou hospede-o num CDN e use a opção **Link (URL)**.
+
+## 9. Fuso horário
 
 O servidor do Railway roda em UTC, e não é preciso configurar nada. Agendamentos e janelas de envio usam o fuso do navegador de quem criou a campanha, e o export usa o fuso da campanha.
 
-## 9. Backups
+## 10. Backups
 
 Os dados ficam no volume. Ative os **backups do volume** no Railway (aba *Backups* do volume) e, para registros importantes, baixe o **Exportar CSV** das campanhas.
 
-## 10. Testar localmente como no Railway
+## 11. Testar localmente como no Railway
 
 ```bash
 npm ci
@@ -130,5 +138,7 @@ PORT=3000 RAILWAY_VOLUME_MOUNT_PATH=./data-teste ADMIN_PASSWORD=teste npm start
 | Botões não geram resposta | recebimento desligado ou serviço dormindo | aba **Respostas**: o status deve ser "Recebendo respostas em tempo real"; desligue o Serverless |
 | Agendamento não disparou no horário | serviço dormindo ou parado | desligue o Serverless; ao voltar, o app dispara o que estiver atrasado |
 | Lead não chegou ao Clint | erro no webhook | aba **Respostas** → "com falha" mostra a resposta do Clint; corrija e use **Reenviar falhas** |
-| Upload de mídia falha | arquivo grande (limite ~45 MB) | use **Link (URL)** para arquivos grandes |
+| "Arquivos acima de 45 MB precisam… endereço público" | painel sem domínio público | gere o domínio em Networking (ou defina `PUBLIC_URL`) |
+| Mídia não aparece na mensagem | a uazapi não conseguiu baixar o link | confira no log a linha `Mídias servidas em…` e se o domínio abre de fora; com botões, veja também a versão da uazapi nas configurações |
+| Vídeo chega antes, separado dos botões | uazapi anterior à 2.6 | esperado; atualize a uazapi para 2.6+ para o vídeo ir no topo dos botões |
 | Mensagens enviadas em dobro | mais de 1 réplica | volte para 1 réplica |

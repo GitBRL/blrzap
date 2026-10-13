@@ -1,4 +1,5 @@
 import Papa from 'papaparse'
+import { api } from './api.js'
 
 /** Lê o CSV aceitando UTF-8 ou Windows-1252 (padrão do Excel em português). */
 export async function readCsvFile(file) {
@@ -22,14 +23,34 @@ export async function readCsvFile(file) {
   return { headers, rows: parsed.data, delimiter: parsed.meta.delimiter }
 }
 
-export function readAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Envia o arquivo em partes de 8 MB (suporta vídeos de até 512 MB).
+ * Cada parte é tentada até 3 vezes; `onProgress` recebe de 0 a 1.
+ */
+export async function uploadFile(file, type, onProgress) {
+  const { id, chunkSize } = await api.uploadInit({ fileName: file.name, mimetype: file.type, size: file.size, type })
+  const total = Math.max(1, Math.ceil(file.size / chunkSize))
+  for (let i = 0; i < total; i++) {
+    const part = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize))
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await api.uploadChunk(id, i, part)
+        break
+      } catch (err) {
+        if (attempt >= 3) throw err
+        await wait(1000 * attempt)
+      }
+    }
+    onProgress?.((i + 1) / total)
+  }
+  await api.uploadComplete(id)
+  return id
 }
+
+export const formatBytes = (bytes) =>
+  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB` : `${Math.ceil(bytes / 1024)} KB`
 
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 

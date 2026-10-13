@@ -1,12 +1,25 @@
-import { DATA_DIR, ON_RAILWAY, ROOT } from './env.js'
+import { DATA_DIR, ON_RAILWAY, publicBaseUrl, ROOT } from './env.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import express from 'express'
 import Papa from 'papaparse'
 import { normalizePhone } from '../shared/phone.js'
 import { publicConfig, setConfig } from './config.js'
-import { flushAll, getCampaign, listCampaigns, loadCampaigns, removeCampaign, saveUpload } from './store.js'
-import { instanceStatus, UazapiError } from './uazapi.js'
+import {
+  cleanupUploads,
+  completeUpload,
+  createUpload,
+  flushAll,
+  getCampaign,
+  listCampaigns,
+  loadCampaigns,
+  removeCampaign,
+  UPLOAD_CHUNK_SIZE,
+  uploadFilePath,
+  uploadInfo,
+  writeUploadChunk,
+} from './store.js'
+import { instanceStatus, serverVersion, UazapiError, versionAtLeast } from './uazapi.js'
 import {
   ADMIN_USER,
   authEnabled,
@@ -35,6 +48,8 @@ import { DEFAULT_TIMEZONE } from '../shared/schedule.js'
 import {
   cancelCampaign,
   createCampaign,
+  INLINE_MAX_BYTES,
+  MEDIA_LIMITS,
   deliver,
   kick,
   normalizeMedia,
@@ -63,6 +78,19 @@ app.get('/api/health', (req, res) => res.json({ ok: true, uptime: Math.round(pro
 
 // Webhook da uazapi (opcional): autenticado pelo token da instância no payload, fora da senha do painel
 app.post('/api/webhook/uazapi', webhookHandler)
+
+// Mídias dos disparos: a uazapi baixa daqui. Público, mas o id é um UUID aleatório (impossível de adivinhar).
+app.get('/media/:id/:name', (req, res) => {
+  const info = uploadInfo(req.params.id)
+  if (!info?.complete) return res.status(404).send('Arquivo não encontrado')
+  res.set('Cache-Control', 'private, max-age=3600')
+  if (info.kind === 'b64') {
+    const buffer = Buffer.from(fs.readFileSync(path.join(path.dirname(uploadFilePath(req.params.id)), `${req.params.id}.b64`), 'utf8'), 'base64')
+    return res.type(info.mimetype || 'application/octet-stream').send(buffer)
+  }
+  // sendFile atende "Range" (download em partes / retomada)
+  res.sendFile(uploadFilePath(req.params.id), { headers: { 'Content-Type': info.mimetype || 'application/octet-stream' } })
+})
 
 // ---- Login (usuário admin + ADMIN_PASSWORD do .env) ---------------------------------------
 
@@ -119,13 +147,27 @@ api.put('/config', (req, res) => {
   res.json(publicConfig())
 })
 
+/** Capacidades do servidor: versão da uazapi e como as mídias são entregues. */
+async function serverInfo() {
+  const version = await serverVersion()
+  return {
+    version,
+    buttonMedia: versionAtLeast(version, '2.6.0'),
+    publicMedia: Boolean(publicBaseUrl()),
+    inlineLimitMB: Math.round(INLINE_MAX_BYTES / 1024 / 1024),
+    limitsMB: Object.fromEntries(Object.entries(MEDIA_LIMITS).map(([k, v]) => [k, Math.round(v / 1024 / 1024)])),
+  }
+}
+
 api.get('/instance', async (req, res) => {
   const cfg = publicConfig()
-  if (!cfg.baseUrl || !cfg.hasToken) return res.json({ configured: false })
+  if (!cfg.baseUrl || !cfg.hasToken) return res.json({ configured: false, server: await serverInfo() })
+  const server = await serverInfo()
   try {
     const data = await instanceStatus()
     const inst = data?.instance || {}
     res.json({
+      server,
       configured: true,
       state: inst.status || (data?.status?.connected ? 'connected' : 'disconnected'),
       connected: Boolean(data?.status?.connected && data?.status?.loggedIn !== false),
@@ -134,19 +176,51 @@ api.get('/instance', async (req, res) => {
       number: data?.status?.jid?.user || '',
     })
   } catch (err) {
-    res.json({ configured: true, state: 'error', connected: false, error: err.message })
+    res.json({ configured: true, state: 'error', connected: false, error: err.message, server })
   }
 })
 
 // ---- Mídia e envio de teste ------------------------------------------------------
 
-api.post('/uploads', (req, res) => {
-  const { base64, mimetype, fileName } = req.body || {}
-  if (typeof base64 !== 'string' || !base64) throw new ValidationError('Arquivo vazio.')
-  const clean = base64.replace(/^data:[^,]*,/, '')
-  if (!/^[A-Za-z0-9+/=\s]+$/.test(clean.slice(0, 1000))) throw new ValidationError('Arquivo inválido.')
-  const id = saveUpload({ base64: clean, mimetype: String(mimetype || ''), fileName: String(fileName || '') })
-  res.status(201).json({ id })
+// Upload em partes: init → PUT de cada parte (8 MB) → complete. Suporta vídeos de até 512 MB.
+api.post('/uploads/init', (req, res) => {
+  const { fileName, mimetype, size, type } = req.body || {}
+  const bytes = Number(size)
+  if (!Number.isInteger(bytes) || bytes <= 0) throw new ValidationError('Arquivo vazio.')
+  const limit = MEDIA_LIMITS[type] || MEDIA_LIMITS.document
+  if (bytes > limit) throw new ValidationError(`Arquivo grande demais: o limite para este tipo é ${Math.round(limit / 1024 / 1024)} MB.`)
+  if (!publicBaseUrl() && bytes > INLINE_MAX_BYTES) {
+    throw new ValidationError(
+      `Arquivos acima de ${Math.round(INLINE_MAX_BYTES / 1024 / 1024)} MB precisam que o painel tenha um endereço público (Railway ou PUBLIC_URL), para a uazapi baixar o arquivo.`,
+    )
+  }
+  const upload = createUpload({
+    fileName: String(fileName || 'arquivo').slice(0, 200),
+    mimetype: String(mimetype || '').slice(0, 100),
+    size: bytes,
+  })
+  res.status(201).json(upload)
+})
+
+api.put(
+  '/uploads/:id/chunks/:index',
+  express.raw({ type: () => true, limit: UPLOAD_CHUNK_SIZE + 1024 * 1024 }),
+  async (req, res) => {
+    try {
+      await writeUploadChunk(req.params.id, Number(req.params.index), req.body)
+    } catch (err) {
+      throw new ValidationError(err.message)
+    }
+    res.json({ ok: true })
+  },
+)
+
+api.post('/uploads/:id/complete', (req, res) => {
+  try {
+    res.json(completeUpload(req.params.id))
+  } catch (err) {
+    throw new ValidationError(err.message)
+  }
 })
 
 api.post('/test-send', async (req, res) => {
@@ -376,7 +450,35 @@ app.listen(PORT, () => {
   startScheduler()
   startListener()
   resumePendingWebhooks()
+  scheduleUploadCleanup()
+  checkPublicUrl()
 })
+
+/** Apaga, a cada 6 h, uploads com mais de 24 h que nenhuma campanha usa. */
+function scheduleUploadCleanup() {
+  const run = () => {
+    const used = new Set(listCampaigns().map((c) => c.media?.uploadId).filter(Boolean))
+    const removed = cleanupUploads(used)
+    if (removed) console.log(`Limpeza: ${removed} arquivo(s) de mídia sem uso removido(s).`)
+  }
+  run()
+  setInterval(run, 6 * 3600_000).unref()
+}
+
+/** Avisa no log se o endereço público não responde (a uazapi não conseguiria baixar as mídias). */
+async function checkPublicUrl() {
+  const base = publicBaseUrl()
+  if (!base) {
+    console.log(`Sem endereço público (PUBLIC_URL): mídias vão em base64, até ${Math.round(INLINE_MAX_BYTES / 1024 / 1024)} MB.`)
+    return
+  }
+  try {
+    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(10_000) })
+    console.log(res.ok ? `Mídias servidas em ${base}/media/…` : `⚠ ${base} respondeu HTTP ${res.status}: a uazapi pode não conseguir baixar as mídias.`)
+  } catch (err) {
+    console.warn(`⚠ Não foi possível acessar ${base} (${err.cause?.code || err.message}): a uazapi pode não conseguir baixar as mídias.`)
+  }
+}
 
 // Desligamento gracioso: termina o envio em andamento e salva tudo antes de sair
 let stopping = false

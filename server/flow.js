@@ -120,16 +120,21 @@ export function normalizeWebhook(input) {
   return { url, includeSheet, fields }
 }
 
-/** Payload do /send/menu com os botões de interesse (a mídia vai no cabeçalho). */
-export function interestPayload({ flow, key, text, file, media }) {
+/**
+ * Payload do /send/menu com os botões de interesse.
+ * Com `headerMedia`, a mídia vai no topo do botão: em `file` (uazapi 2.6+) e, para imagem,
+ * também em `imageButton` (único campo lido pelas versões anteriores à 2.6).
+ */
+export function interestPayload({ flow, key, text, file, media, headerMedia = true }) {
   const payload = {
     type: 'button',
     text,
     choices: [`${flow.buttons.yes}|${buttonId(key, 'i', 1)}`, `${flow.buttons.no}|${buttonId(key, 'i', 0)}`],
   }
   if (flow.footer) payload.footerText = flow.footer
-  if (file) {
+  if (file && headerMedia) {
     payload.file = file
+    if (media.type === 'image') payload.imageButton = file
     // Sem `mimetype` a uazapi tenta adivinhar o tipo do cabeçalho (e descarta a mídia em silêncio
     // quando não consegue). `image`, `video` e `document` são valores aceitos pela API.
     payload.mimetype = media.mimetype || media.type

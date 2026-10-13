@@ -57,6 +57,25 @@ O painel abre numa tela de login (usuário `admin` + essa senha). A sessão fica
 
 Também é possível anexar imagem, vídeo, documento ou áudio, por upload ou por URL pública. Nesse caso, o texto vai como legenda.
 
+### Anexos e limites
+
+| Tipo | Limite |
+|---|---|
+| Vídeo, documento | 512 MB |
+| Imagem, áudio | 32 MB |
+
+- O arquivo é enviado ao painel **em partes de 8 MB, assim que é escolhido**, com barra de progresso e novas tentativas automáticas. O disparo só libera quando o envio termina.
+- **Com endereço público** (Railway ou `PUBLIC_URL`), a uazapi **baixa o arquivo por um link** do painel (`/media/<id>/<nome>`). Isso é obrigatório acima de 45 MB. **Sem endereço público** (rodando local), o arquivo vai em base64 e o limite é 45 MB.
+- ⚠ **Tráfego:** a uazapi baixa o arquivo **a cada contato**. Um vídeo de 500 MB para 1.000 contatos gera ~500 GB de saída no servidor do painel, e o Railway cobra por tráfego. Para campanhas grandes, comprima o vídeo (poucos MB costumam bastar no WhatsApp) ou hospede o arquivo num CDN e use **Link (URL)**. O WhatsApp também pode demorar ou recusar vídeos muito grandes, então faça um **Enviar teste** antes.
+- Arquivos que nenhuma campanha usa são apagados depois de 24 h. Excluir campanhas antigas libera o espaço dos vídeos.
+
+### Mídia com botões e versão da uazapi
+
+A versão da uazapi é lida no `/status` público dela e aparece na tela de configurações.
+
+- **Imagem:** vai no topo da mensagem com botões em qualquer versão. O app envia nos campos `imageButton` (versões < 2.6) e `file` (2.6+).
+- **Vídeo e documento:** só aparecem no topo dos botões a partir da **uazapi 2.6.0**. Em versões anteriores, o app envia o arquivo numa mensagem própria **logo antes** da mensagem com botões. A tela avisa e a prévia mostra assim.
+
 ## Botões de interesse e qualificação
 
 Em **Mensagem → Com botões de interesse**, a campanha envia imagem (ou vídeo/documento) + texto + dois botões (`/send/menu`):
