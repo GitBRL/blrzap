@@ -18,6 +18,9 @@ import { checkNumbers, fatalReason, sendMedia, sendMenu, sendText, supportsButto
 import { publicBaseUrl } from './env.js'
 import { ValidationError } from './errors.js'
 import { flowCounts, interestPayload, normalizeFlow } from './flow.js'
+import { onInitialSent, startMenuPayload, workflowCounts } from './workflow.js'
+import { snapshotForCampaign } from './workflows.js'
+import { startNode, usesList } from '../shared/workflow.js'
 
 export const MEDIA_TYPES = ['image', 'video', 'document', 'audio', 'ptt']
 
@@ -153,10 +156,11 @@ function sendFailure(res) {
 }
 
 /**
- * Monta o payload e envia uma mensagem (texto, mídia ou botões de interesse).
- * Repete em caso de 429. `flowKey` identifica a campanha nos IDs dos botões.
+ * Monta o payload e envia uma mensagem (texto, mídia, botões de interesse do fluxo antigo
+ * ou os botões do bloco de disparo de um workflow). Repete em caso de 429. `flowKey`
+ * identifica a campanha nos IDs dos botões.
  */
-export async function deliver({ number, template, vars, media, settings, flow, flowKey }) {
+export async function deliver({ number, template, vars, media, settings, flow, workflow, flowKey }) {
   const text = renderTemplate(template, vars)
   const common = {
     number,
@@ -169,12 +173,20 @@ export async function deliver({ number, template, vars, media, settings, flow, f
     if (!file) throw new UazapiError('Arquivo de mídia não encontrado no servidor.', { kind: 'config' })
   }
 
+  // Botões na mensagem da campanha: os do fluxo antigo ou os do bloco de disparo do workflow
+  const start = workflow ? startNode(workflow) : null
+  const menu = flow
+    ? (args) => interestPayload({ flow, key: flowKey, ...args })
+    : start?.data.choices.length
+      ? (args) => startMenuPayload({ node: start, key: flowKey, ...args })
+      : null
+
   let payload
-  let preMedia = null // mídia enviada antes dos botões (uazapi < 2.6 não aceita vídeo/documento no botão)
-  if (flow) {
-    const separate = Boolean(media) && media.type !== 'image' && !(await supportsButtonMedia())
+  let preMedia = null // mídia enviada antes dos botões (uazapi < 2.6 não aceita vídeo/documento no botão; lista nunca aceita)
+  if (menu) {
+    const separate = Boolean(media) && ((start && usesList(start)) || (media.type !== 'image' && !(await supportsButtonMedia())))
     if (separate) preMedia = { ...common, ...mediaBody(media, file) }
-    payload = { ...common, ...interestPayload({ flow, key: flowKey, text, file, media, headerMedia: !separate }) }
+    payload = { ...common, ...menu({ text, file, media, headerMedia: !separate }) }
     if (separate) payload.delay = 1000
   } else if (media) {
     payload = { ...common, ...mediaBody(media, file), text: text || undefined }
@@ -184,7 +196,7 @@ export async function deliver({ number, template, vars, media, settings, flow, f
 
   try {
     if (preMedia) await sendChecked(sendMedia, preMedia)
-    const res = await sendChecked(flow ? sendMenu : media ? sendMedia : sendText, payload)
+    const res = await sendChecked(menu ? sendMenu : media ? sendMedia : sendText, payload)
     return { text, messageId: res?.messageid || res?.id || null }
   } catch (err) {
     err.renderedText = text
@@ -227,6 +239,7 @@ export function createCampaign({
   countryCode = '55',
   filters = null,
   flow: flowInput = null,
+  workflowId = null,
   startAt = null,
   start = true,
 }) {
@@ -235,8 +248,12 @@ export function createCampaign({
   if (!phoneColumn || !(phoneColumn in rows[0])) throw new ValidationError('Selecione a coluna de telefone.')
 
   const normalizedMedia = normalizeMedia(media)
-  const flow = normalizeFlow(flowInput)
-  if (flow) {
+  const id = crypto.randomUUID()
+  // Campanha nova usa workflow; `flow` (botões de interesse) fica só para quem ainda o envia
+  const workflow = workflowId ? snapshotForCampaign(workflowId, id.slice(0, 8)) : null
+  const flow = workflow ? null : normalizeFlow(flowInput)
+  const withButtons = Boolean(flow) || Boolean(startNode(workflow)?.data.choices.length)
+  if (withButtons) {
     if (!String(template).trim()) throw new ValidationError('Escreva o texto da mensagem com botões.')
     if (normalizedMedia && !['image', 'video', 'document'].includes(normalizedMedia.type)) {
       throw new ValidationError('Mensagens com botões aceitam apenas imagem, vídeo ou documento.')
@@ -254,7 +271,6 @@ export function createCampaign({
   const now = Date.now()
   const scheduledFor = startAt ? validateStartAt(startAt) : null
   const scheduled = start && scheduledFor && scheduledFor > now + MIN_SCHEDULE_AHEAD
-  const id = crypto.randomUUID()
   if (flow) flow.key = id.slice(0, 8)
   const filterText = describeFilters(filters)
 
@@ -274,6 +290,7 @@ export function createCampaign({
     template: String(template),
     media: normalizedMedia,
     flow,
+    workflow,
     filters: filterText ? { ...filters, text: filterText, totalRows: rows.length, keptRows: filtered.rows.length } : null,
     settings: normalizeSettings(settings),
     phoneColumn,
@@ -295,6 +312,7 @@ export function createCampaign({
     log: [],
   }
 
+  if (workflow) log(c, 'info', `Workflow: ${workflow.name} (${workflow.nodes.length} blocos).`)
   if (filterText) {
     log(c, 'info', `Filtro aplicado (${filterText}): ${plural(filtered.rows.length, 'linha', 'linhas')} de ${rows.length.toLocaleString('pt-BR')}.`)
   }
@@ -339,10 +357,12 @@ export function summarize(c) {
     template: c.template,
     media: c.media ? { type: c.media.type, fileName: c.media.fileName, url: c.media.url || null } : null,
     flow: c.flow || null,
+    workflow: c.workflow || null,
     filters: c.filters || null,
     settings: c.settings,
     counts: countsOf(c),
     flowCounts: c.flow ? flowCounts(c) : null,
+    workflowCounts: c.workflow ? workflowCounts(c) : null,
   }
 }
 
@@ -570,10 +590,12 @@ async function sendAll(c) {
         media: c.media,
         settings: c.settings,
         flow: c.flow,
-        flowKey: c.flow?.key,
+        workflow: c.workflow,
+        flowKey: c.flow?.key || c.workflow?.key,
       })
       const { text, messageId } = await inFlight
       Object.assign(ct, { status: 'sent', text, messageId, error: null, processedAt: Date.now() })
+      if (c.workflow) onInitialSent(c, ct)
       consecutiveFailures = 0
       log(c, 'success', `Enviado para ${ct.number}`)
     } catch (err) {

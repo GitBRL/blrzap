@@ -40,5 +40,12 @@ export const api = {
   remove: (id) => request(`/campaigns/${id}`, { method: 'DELETE' }),
   responses: () => request('/responses'),
   webhookTest: (body) => request('/webhook-test', { method: 'POST', body }),
-  exportUrl: (id, only) => `/api/campaigns/${id}/export${only ? `?only=${only}` : ''}`,
+  exportUrl: (id, only) => `/api/campaigns/${id}/export${only ? `?only=${encodeURIComponent(only)}` : ''}`,
+  workflows: () => request('/workflows'),
+  workflow: (id) => request(`/workflows/${id}`),
+  createWorkflow: (body) => request('/workflows', { method: 'POST', body }),
+  saveWorkflow: (id, body) => request(`/workflows/${id}`, { method: 'PUT', body }),
+  duplicateWorkflow: (id) => request(`/workflows/${id}/duplicate`, { method: 'POST' }),
+  removeWorkflow: (id) => request(`/workflows/${id}`, { method: 'DELETE' }),
+  workflowWebhookTest: (body) => request('/workflows/webhook-test', { method: 'POST', body }),
 }

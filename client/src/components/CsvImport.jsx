@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Download, FileSpreadsheet, Upload, X } from 'lucide-react'
-import { readCsvFile, formatNumber } from '../utils.js'
+import { readContactsFile, formatNumber } from '../utils.js'
 import RowFilters from './RowFilters.jsx'
 
 const PREVIEW_ROWS = 5
@@ -28,7 +28,7 @@ export default function CsvImport({
     setError('')
     setLoading(true)
     try {
-      const parsed = await readCsvFile(file)
+      const parsed = await readContactsFile(file)
       onLoad({ fileName: file.name, ...parsed })
     } catch (err) {
       setError(err.message || 'Não foi possível ler o arquivo.')
@@ -61,9 +61,15 @@ export default function CsvImport({
           onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && inputRef.current?.click()}
         >
           <Upload size={28} />
-          <strong>{loading ? 'Lendo arquivo…' : 'Arraste o CSV aqui ou clique para selecionar'}</strong>
-          <span className="muted small">Separado por vírgula ou ponto e vírgula, com cabeçalho na primeira linha</span>
-          <input ref={inputRef} type="file" accept=".csv,text/csv,.txt" hidden onChange={(e) => handleFile(e.target.files?.[0])} />
+          <strong>{loading ? 'Lendo arquivo…' : 'Arraste o CSV ou a planilha (XLS, XLSX) aqui ou clique para selecionar'}</strong>
+          <span className="muted small">CSV separado por vírgula ou ponto e vírgula, ou planilha do Excel, com cabeçalho na primeira linha</span>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv,text/csv,.txt,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            hidden
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
         </div>
         {error && <div className="callout bad">{error}</div>}
         <a className="link small" href="/exemplo-contatos.csv" download>
@@ -83,8 +89,27 @@ export default function CsvImport({
           <strong>{csv.fileName}</strong>
           <span className="muted small">
             {formatNumber(csv.rows.length)} linhas · {csv.headers.length} colunas
+            {csv.sheet && csv.sheets?.length === 1 ? ` · aba ${csv.sheet}` : ''}
           </span>
         </div>
+        {csv.sheets?.length > 1 && (
+          <select
+            className="sheet-pick"
+            value={csv.sheet}
+            onChange={(e) => {
+              const sh = csv.sheets.find((x) => x.name === e.target.value)
+              if (sh) onLoad({ ...csv, headers: sh.headers, rows: sh.rows, sheet: sh.name })
+            }}
+            aria-label="Aba da planilha"
+            title="Aba da planilha"
+          >
+            {csv.sheets.map((sh) => (
+              <option key={sh.name} value={sh.name}>
+                Aba: {sh.name} ({formatNumber(sh.rows.length)})
+              </option>
+            ))}
+          </select>
+        )}
         <button className="icon-btn" onClick={onClear} title="Remover arquivo" aria-label="Remover arquivo">
           <X size={18} />
         </button>

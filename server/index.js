@@ -43,6 +43,27 @@ import {
   resumePendingWebhooks,
   retryFailedWebhooks,
 } from './flow.js'
+import {
+  buildWebhookPayload,
+  createWorkflowTestSession,
+  onInitialSent,
+  resumeWorkflowWebhooks,
+  retryWorkflowWebhooks,
+  startWorkflowTimers,
+  workflowFilter,
+} from './workflow.js'
+import {
+  createWorkflow,
+  deleteWorkflow,
+  duplicateWorkflow,
+  getWorkflow,
+  listWorkflows,
+  loadWorkflows,
+  snapshotForCampaign,
+  updateWorkflow,
+  workflowSummary,
+} from './workflows.js'
+import { cleanWorkflow, nodeById, savedVariables } from '../shared/workflow.js'
 import { buildLeadPayload, DEFAULT_DATA_STEP } from '../shared/datafields.js'
 import { DEFAULT_TIMEZONE } from '../shared/schedule.js'
 import {
@@ -224,17 +245,20 @@ api.post('/uploads/:id/complete', (req, res) => {
 })
 
 api.post('/test-send', async (req, res) => {
-  const { number, template = '', vars = {}, media, settings, countryCode = '55', flow: flowInput } = req.body || {}
+  const { number, template = '', vars = {}, media, settings, countryCode = '55', flow: flowInput, workflowId } = req.body || {}
   const normalized = normalizePhone(number, countryCode)
   if (!normalized) throw new ValidationError('Número de teste inválido.')
   const normalizedMedia = normalizeMedia(media)
-  const flow = normalizeFlow(flowInput)
-  if (flow && !String(template).trim()) throw new ValidationError('Escreva o texto da mensagem com botões.')
+  const workflow = workflowId ? snapshotForCampaign(workflowId, 'teste') : null
+  const flow = workflow ? null : normalizeFlow(flowInput)
+  const withButtons = Boolean(flow) || Boolean(workflow?.nodes.find((n) => n.type === 'start')?.data.choices.length)
+  if (withButtons && !String(template).trim()) throw new ValidationError('Escreva o texto da mensagem com botões.')
   if (!String(template).trim() && !normalizedMedia) throw new ValidationError('Escreva a mensagem ou anexe uma mídia.')
 
-  // Com botões, o teste vira uma sessão temporária para o fluxo responder no seu número
+  // O teste vira uma sessão temporária para o fluxo/workflow responder no seu número
   const session = flow ? createTestSession({ flow, vars, number: normalized }) : null
-  if (session) startListener()
+  const wfSession = workflow ? createWorkflowTestSession({ workflow, vars, number: normalized }) : null
+  if (session || wfSession) startListener()
 
   try {
     const result = await deliver({
@@ -244,10 +268,15 @@ api.post('/test-send', async (req, res) => {
       media: normalizedMedia,
       settings: { ...normalizeSettings(settings), typingSeconds: 0 },
       flow,
-      flowKey: session?.key,
+      workflow,
+      flowKey: session?.key || wfSession?.key,
     })
     if (session) session.contacts[0].messageId = result.messageId
-    res.json({ ok: true, number: normalized, flow: Boolean(flow), ...result })
+    if (wfSession) {
+      wfSession.contacts[0].messageId = result.messageId
+      onInitialSent(wfSession, wfSession.contacts[0])
+    }
+    res.json({ ok: true, number: normalized, flow: Boolean(flow || workflow), ...result })
   } catch (err) {
     if (err instanceof UazapiError) throw Object.assign(new Error(err.message), { status: 502 })
     throw err
@@ -260,7 +289,7 @@ api.get('/campaigns', (req, res) => res.json(listCampaigns().map(summarize)))
 
 api.post('/campaigns', (req, res) => {
   const c = createCampaign(req.body || {})
-  if (c.flow) startListener()
+  if (c.flow || c.workflow) startListener()
   res.status(201).json(summarize(c))
 })
 
@@ -288,6 +317,45 @@ api.post('/webhook-test', async (req, res) => {
   res.json({ ...result, payload })
 })
 
+// ---- Workflows (templates) --------------------------------------------------------
+
+api.get('/workflows', (req, res) => res.json(listWorkflows().map(workflowSummary)))
+api.get('/workflows/:id', (req, res) => {
+  const wf = getWorkflow(req.params.id)
+  res.json({ ...wf, ...workflowSummary(wf) })
+})
+api.post('/workflows', (req, res) => {
+  const wf = createWorkflow(req.body || {})
+  res.status(201).json({ ...wf, ...workflowSummary(wf) })
+})
+api.put('/workflows/:id', (req, res) => {
+  const wf = updateWorkflow(req.params.id, req.body || {})
+  res.json({ ...wf, ...workflowSummary(wf) })
+})
+api.post('/workflows/:id/duplicate', (req, res) => {
+  const wf = duplicateWorkflow(req.params.id)
+  res.status(201).json({ ...wf, ...workflowSummary(wf) })
+})
+api.delete('/workflows/:id', (req, res) => {
+  deleteWorkflow(req.params.id)
+  res.status(204).end()
+})
+
+// Envia um exemplo do bloco "Webhook" (para mapear os campos no CRM antes do disparo)
+api.post('/workflows/webhook-test', async (req, res) => {
+  const { workflow: input, nodeId, vars = {} } = req.body || {}
+  const wf = cleanWorkflow(input)
+  const node = nodeById(wf, nodeId)
+  if (!node || node.type !== 'webhook') throw new ValidationError('Bloco de webhook não encontrado.')
+  if (!/^https?:\/\/[^\s/]+/i.test(node.data.url)) throw new ValidationError('Informe a URL do webhook.')
+  const samples = {}
+  for (const v of savedVariables(wf)) samples[v.name] = /mail/i.test(v.name) ? 'teste@exemplo.com.br' : /telefone|phone|celular/i.test(v.name) ? '5511999998888' : `[${v.name}]`
+  const sample = { ...samples, ...vars, whatsapp: '5511999998888', campanha: 'Teste de webhook' }
+  const payload = buildWebhookPayload(node.data, sample, vars, true)
+  const result = await postJson(node.data.url, payload)
+  res.json({ ...result, payload })
+})
+
 api.get('/campaigns/:id', (req, res) => {
   const c = findCampaign(req)
   res.json({ ...summarize(c), log: c.log.slice(-100).reverse() })
@@ -296,7 +364,8 @@ api.get('/campaigns/:id', (req, res) => {
 api.get('/campaigns/:id/contacts', (req, res) => {
   const c = findCampaign(req)
   const status = String(req.query.status || '')
-  const flowFilter = FLOW_FILTERS[String(req.query.flow || '')]
+  const flowFilter = c.workflow ? null : FLOW_FILTERS[String(req.query.flow || '')]
+  const wfFilter = c.workflow ? workflowFilter(req.query.flow) : null
   const q = String(req.query.q || '').trim().toLowerCase()
   const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
   const page = Math.max(1, Number(req.query.page) || 1)
@@ -304,6 +373,7 @@ api.get('/campaigns/:id/contacts', (req, res) => {
   let items = c.contacts
   if (status) items = items.filter((ct) => ct.status === status)
   if (flowFilter) items = items.filter((ct) => ct.status === 'sent' && flowFilter(ct.flow || {}))
+  if (wfFilter) items = items.filter((ct) => ct.status === 'sent' && ct.wf && wfFilter(ct.wf))
   if (q) {
     items = items.filter(
       (ct) =>
@@ -326,6 +396,7 @@ api.get('/campaigns/:id/contacts', (req, res) => {
       messageId: ct.messageId,
       processedAt: ct.processedAt,
       flow: ct.flow || null,
+      wf: ct.wf ? wfView(ct.wf) : null,
     })),
   })
 })
@@ -336,6 +407,7 @@ api.get('/campaigns/:id/export', (req, res) => {
   // O servidor pode rodar em UTC (Railway): usa o fuso de quem criou a campanha
   const timeZone = c.settings.timeZone || c.settings.window?.timeZone || DEFAULT_TIMEZONE
   const when = (ts) => (ts ? new Date(ts).toLocaleString('pt-BR', { timeZone }) : '')
+  if (c.workflow) return exportWorkflowCampaign(c, req, res, when, labels)
   const onlyFilter = c.flow ? FLOW_FILTERS[String(req.query.only || '')] : null
 
   const fields = [...c.headers, 'numero_whatsapp', 'status', 'erro', 'mensagem_enviada', 'message_id', 'processado_em']
@@ -388,13 +460,84 @@ api.get('/campaigns/:id/export', (req, res) => {
   res.send('﻿' + csv) // BOM para o Excel reconhecer UTF-8
 })
 
+/** O estado do contato no workflow, como a tabela mostra. */
+function wfView(s) {
+  return {
+    node: s.node,
+    since: s.since,
+    timeoutAt: s.timeoutAt,
+    tags: s.tags || [],
+    answers: s.answers || {},
+    vars: s.vars || {},
+    done: Boolean(s.done),
+    lastReply: s.lastReply || null,
+    lastReplyAt: s.lastReplyAt || null,
+    webhooks: s.webhooks || {},
+  }
+}
+
+/** Export de campanha com workflow: respostas guardadas, etiquetas, etapa atual e webhooks. */
+function exportWorkflowCampaign(c, req, res, when, labels) {
+  const filter = workflowFilter(req.query.only)
+  const vars = savedVariables(c.workflow).map((v) => v.name)
+  const webhookNodes = c.workflow.nodes.filter((n) => n.type === 'webhook')
+  const titleOf = (n) => n?.data.title || n?.type || ''
+  const fields = [
+    ...c.headers,
+    'numero_whatsapp',
+    'status',
+    'erro',
+    'mensagem_enviada',
+    'message_id',
+    'processado_em',
+    'etapa_atual',
+    'concluido',
+    'etiquetas',
+    'ultima_resposta',
+    'respondido_em',
+    ...vars.map((v) => `resposta_${v}`),
+    ...webhookNodes.flatMap((n) => [`webhook_${titleOf(n)}_status`, `webhook_${titleOf(n)}_erro`]),
+  ]
+  let contacts = c.contacts
+  if (filter) contacts = contacts.filter((ct) => ct.status === 'sent' && ct.wf && filter(ct.wf))
+  const whLabels = { sent: 'enviado', failed: 'falha', pending: 'enviando' }
+  const data = contacts.map((ct) => {
+    const s = ct.wf || {}
+    return [
+      ...c.headers.map((h) => ct.vars?.[h] ?? ''),
+      ct.number || '',
+      labels[ct.status] || ct.status,
+      ct.error || '',
+      ct.text || '',
+      ct.messageId || '',
+      when(ct.processedAt),
+      s.node ? titleOf(nodeById(c.workflow, s.node)) : '',
+      s.done ? 'sim' : ct.wf ? 'não' : '',
+      (s.tags || []).join(', '),
+      s.lastReply || '',
+      when(s.lastReplyAt),
+      ...vars.map((v) => s.vars?.[v] ?? ''),
+      ...webhookNodes.flatMap((n) => {
+        const w = s.webhooks?.[n.id]
+        return [whLabels[w?.status] || '', w?.status === 'failed' ? w.error || '' : '']
+      }),
+    ]
+  })
+  const csv = Papa.unparse({ fields, data }, { delimiter: ';' })
+  const suffix = req.query.only ? `-${String(req.query.only).replace(/[^\p{L}\p{N}_-]+/gu, '_')}` : ''
+  const fileName = `${c.name.replace(/[^\p{L}\p{N} _-]+/gu, '').trim() || 'campanha'}${suffix}.csv`
+  res.set('Content-Type', 'text/csv; charset=utf-8')
+  res.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`)
+  res.send('\uFEFF' + csv)
+}
+
 const actions = {
   pause: pauseCampaign,
   resume: resumeCampaign,
   cancel: cancelCampaign,
   'retry-failed': retryFailed,
   'start-now': startNow,
-  'retry-webhooks': retryFailedWebhooks,
+  'retry-webhooks': (c) => (c.workflow ? retryWorkflowWebhooks(c) : retryFailedWebhooks(c)),
   reschedule: (c, body) => reschedule(c, body?.startAt),
 }
 
@@ -436,6 +579,7 @@ app.use((err, req, res, next) => {
 // ---- Inicialização -------------------------------------------------------------------
 
 const loaded = loadCampaigns()
+loadWorkflows()
 app.listen(PORT, () => {
   console.log(`API de disparos na porta ${PORT} (${loaded} campanhas carregadas, dados em ${DATA_DIR})`)
   if (ON_RAILWAY && !process.env.RAILWAY_VOLUME_MOUNT_PATH && !process.env.DATA_DIR) {
@@ -450,6 +594,8 @@ app.listen(PORT, () => {
   startScheduler()
   startListener()
   resumePendingWebhooks()
+  resumeWorkflowWebhooks()
+  startWorkflowTimers()
   scheduleUploadCleanup()
   checkPublicUrl()
 })

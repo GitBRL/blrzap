@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { CheckCheck, ChevronLeft, ChevronRight, FileText, List, Mic, MousePointerClick, Music, Reply, Shuffle, Video } from 'lucide-react'
 import { extractVariables, hasSpintax, renderTemplate } from '@shared/template.js'
-import { dataVars, prefillValue, summaryText } from '@shared/datafields.js'
+import { nextOf, NODE_TYPES, nodeById, startNode, usesList } from '@shared/workflow.js'
 import { whatsappToHtml } from '../utils.js'
 
 function seeded(seed) {
@@ -40,23 +40,16 @@ function Bubble({ children, time }) {
 
 const Text = ({ text }) => <div className="bubble-text" dangerouslySetInnerHTML={{ __html: whatsappToHtml(text) }} />
 
-function Step({ children }) {
-  return (
-    <div className="chat-step">
-      <MousePointerClick size={13} /> {children}
-    </div>
-  )
-}
-
-/** Sequência do fluxo de qualificação: botões → pergunta → resposta final. */
-function FlowPreview({ flow, media, text, vars, time, number, separateMedia }) {
-  const render = (tpl, extra = {}) => renderTemplate(tpl, { ...vars, ...extra }, seeded(1))
-  const usesList = flow.options.length > 3
-  const qualifiedOption = flow.options.find((o) => o.qualified && o.label.trim())
-  const ds = flow.dataStep?.enabled ? flow.dataStep : null
-  const fields = ds ? ds.fields.filter((f) => f.label.trim()) : []
-  // Sem CSV, mostra exemplos no lugar dos dados
-  const values = fields.map((f) => (number ? prefillValue(f, vars, number) : `[${f.label}]`))
+/** A mensagem do disparo com os botões do workflow e para onde cada botão leva. */
+function WorkflowPreview({ workflow, media, text, time, separateMedia }) {
+  const start = startNode(workflow)
+  const choices = start?.data.choices || []
+  const list = usesList(start)
+  const titleOf = (id) => {
+    const n = nodeById(workflow, id)
+    return n ? n.data.title || NODE_TYPES[n.type]?.label : null
+  }
+  const after = (handle) => titleOf(nextOf(workflow, start.id, handle))
 
   return (
     <>
@@ -69,84 +62,64 @@ function FlowPreview({ flow, media, text, vars, time, number, separateMedia }) {
         <Bubble time={time}>
           {!separateMedia && <MediaBlock media={media} />}
           {text.trim() ? <Text text={text} /> : <span className="muted small">Escreva o texto da mensagem</span>}
-          {flow.footer && <div className="bubble-footer">{flow.footer}</div>}
+          {start?.data.footer && <div className="bubble-footer">{start.data.footer}</div>}
         </Bubble>
-        <div className="bubble-buttons">
-          <span>
-            <Reply size={14} /> {flow.buttons.yes || 'Botão 1'}
-          </span>
-          <span>
-            <Reply size={14} /> {flow.buttons.no || 'Botão 2'}
-          </span>
-        </div>
+        {choices.length > 0 && (
+          <div className="bubble-buttons">
+            {list ? (
+              <span>
+                <List size={14} /> {start.data.listButton || 'Ver opções'}
+              </span>
+            ) : (
+              choices.map((c, i) => (
+                <span key={i}>
+                  <Reply size={14} /> {c.label || `Opção ${i + 1}`}
+                </span>
+              ))
+            )}
+          </div>
+        )}
       </div>
-
-      <Step>Contato toca em “{flow.buttons.yes}”</Step>
-
-      <div className="bubble-group">
-        <Bubble time={time}>
-          <Text text={render(flow.question)} />
-        </Bubble>
-        <div className="bubble-buttons">
-          {usesList ? (
-            <span>
-              <List size={14} /> {flow.listButton || 'Ver opções'}
-            </span>
-          ) : (
-            flow.options.map((o, i) => <span key={i}>{o.label || `Faixa ${i + 1}`}</span>)
-          )}
-        </div>
-      </div>
-
-      {usesList && (
+      {list && (
         <ol className="list-preview">
-          {flow.options.map((o, i) => (
-            <li key={i} className={o.qualified ? 'q' : ''}>
-              {o.label || `Faixa ${i + 1}`}
-              {o.qualified && <span className="badge tone-ok">qualificado</span>}
-            </li>
+          {choices.map((c, i) => (
+            <li key={i}>{c.label}</li>
           ))}
         </ol>
       )}
 
-      {qualifiedOption && ds && (
-        <>
-          <Step>Escolhe “{qualifiedOption.label}”</Step>
-          <div className="bubble-group">
-            <Bubble time={time}>
-              <Text text={summaryText(render(ds.intro), fields, values)} />
-            </Bubble>
-            <div className="bubble-buttons">
-              <span>
-                <Reply size={14} /> {ds.confirmLabel || 'Confirmar'}
-              </span>
-              <span>
-                <Reply size={14} /> {ds.editLabel || 'Alterar'}
-              </span>
-            </div>
-          </div>
-          {values.some((v) => !v) && <p className="chat-note">Dados em branco são perguntados antes do resumo.</p>}
-        </>
-      )}
-
-      {qualifiedOption && flow.replies.qualified && (
-        <>
-          <Step>{ds ? `Toca em “${ds.confirmLabel}”` : `Escolhe “${qualifiedOption.label}”`}</Step>
-          <Bubble time={time}>
-            <Text text={render(flow.replies.qualified, ds ? dataVars(fields, values) : {})} />
-          </Bubble>
-        </>
-      )}
+      <div className="wf-preview-next">
+        <strong>Depois, pelo workflow “{workflow.name}”:</strong>
+        <ul>
+          {choices.length ? (
+            choices.map((c, i) => (
+              <li key={i}>
+                <MousePointerClick size={13} /> “{c.label}” → {after(`c${i}`) || 'fim do caminho'}
+                {c.tag && <span className="badge tone-ok">{c.tag}</span>}
+              </li>
+            ))
+          ) : (
+            <li>
+              <MousePointerClick size={13} /> Segue direto para {after('next') || 'o fim (sem próximos blocos)'}
+            </li>
+          )}
+          {after('timeout') && (
+            <li>
+              <MousePointerClick size={13} /> Sem resposta → {after('timeout')}
+            </li>
+          )}
+        </ul>
+      </div>
     </>
   )
 }
 
-export default function MessagePreview({ template, media, flow, separateMedia, contacts, index, setIndex, seed, onReshuffle }) {
+export default function MessagePreview({ template, media, workflow, separateMedia, contacts, index, setIndex, seed, onReshuffle }) {
   const contact = contacts[index]
   // Sem CSV, mostra o nome das variáveis no lugar dos valores
   const vars = useMemo(
-    () => contact?.vars || Object.fromEntries([template, flow?.question || ''].flatMap(extractVariables).map((v) => [v, `[${v}]`])),
-    [contact, template, flow?.question],
+    () => contact?.vars || Object.fromEntries(extractVariables(template).map((v) => [v, `[${v}]`])),
+    [contact, template],
   )
   const text = useMemo(() => renderTemplate(template, vars, seeded(seed + index)), [template, vars, seed, index])
   const isAudio = media.mode !== 'none' && (media.type === 'audio' || media.type === 'ptt')
@@ -183,8 +156,8 @@ export default function MessagePreview({ template, media, flow, separateMedia, c
       </div>
 
       <div className="chat">
-        {flow ? (
-          <FlowPreview flow={flow} media={media} text={text} vars={vars} time={now} number={contact?.number} separateMedia={separateMedia} />
+        {workflow ? (
+          <WorkflowPreview workflow={workflow} media={media} text={text} time={now} separateMedia={separateMedia} />
         ) : empty ? (
           <p className="chat-empty">A prévia da mensagem aparece aqui.</p>
         ) : (

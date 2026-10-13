@@ -20,7 +20,7 @@ import { sendMenu, sendText } from './uazapi.js'
 // i = interesse · r = faixa de faturamento · c = confirmar (1) / alterar (0) dados
 const BUTTON_ID_RE = /^dsp:([a-z0-9]+):(i|r|c):(\d+)$/
 const TEST_SESSION_TTL = 24 * 3600_000
-const TYPED_REPLY_WINDOW = 15 * 24 * 3600_000 // respostas digitadas só valem para campanhas recentes
+export const TYPED_REPLY_WINDOW = 15 * 24 * 3600_000 // respostas digitadas só valem para campanhas recentes
 const REPLY_GAP_MS = 1200
 
 export const buttonId = (key, kind, value) => `dsp:${key}:${kind}:${value}`
@@ -190,7 +190,7 @@ function log(ctx, level, text) {
 
 // ---- Identificação do contato ----------------------------------------------------------
 
-function jidDigits(jid) {
+export function jidDigits(jid) {
   const value = String(jid || '')
   if (!value || /@(lid|g\.us|newsletter|broadcast)$/.test(value)) return null
   const user = value.split('@')[0].split(':')[0]
@@ -209,18 +209,21 @@ function contactKeys(ct) {
   return new Set([...phoneKeys(jidDigits(ct.number) || ct.number), ...phoneKeys(jidDigits(ct.jid))])
 }
 
-function findByPhone(ctx, phones) {
+export function findByPhone(ctx, phones) {
   if (!phones.length) return null
   const wanted = new Set(phones.flatMap(phoneKeys))
   return ctx.contacts.find((ct) => ct.status === 'sent' && [...contactKeys(ct)].some((k) => wanted.has(k))) || null
 }
 
-const stripOwner = (id) => String(id || '').split(':').pop()
+export const stripOwner = (id) => String(id || '').split(':').pop()
 
-function findByMessageId(ctx, quoted) {
+export function findByMessageId(ctx, quoted) {
   if (!quoted) return null
   const id = stripOwner(quoted)
-  return ctx.contacts.find((ct) => stripOwner(ct.messageId) === id || ct.flow?.msgIds?.includes(id)) || null
+  return (
+    ctx.contacts.find((ct) => stripOwner(ct.messageId) === id || ct.flow?.msgIds?.includes(id) || ct.wf?.msgIds?.includes(id)) ||
+    null
+  )
 }
 
 /** Em que ponto do fluxo o contato está. */
@@ -234,7 +237,7 @@ function stageOf(ct, flow) {
 
 // ---- Interpretação da mensagem recebida ------------------------------------------------
 
-const normalize = (s) =>
+export const normalize = (s) =>
   String(s ?? '')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -243,7 +246,7 @@ const normalize = (s) =>
     .trim()
     .toLowerCase()
 
-function extractMessage(evt) {
+export function extractMessage(evt) {
   if (!evt || typeof evt !== 'object') return null
   const type = String(evt.EventType || evt.type || evt.event || '').toLowerCase()
   if (type && !type.startsWith('message')) return null
@@ -252,7 +255,7 @@ function extractMessage(evt) {
   return msg && typeof msg === 'object' ? { msg, chat: evt.chat || evt.data?.chat || {} } : null
 }
 
-function selectedId(msg) {
+export function selectedId(msg) {
   if (msg.buttonOrListid) return String(msg.buttonOrListid)
   let content = msg.content
   if (typeof content === 'string') {
@@ -308,22 +311,34 @@ function typedAnswer(ctx, ct, text) {
 // ---- Envio das respostas automáticas (fila serial) -------------------------------------
 
 let replyQueue = Promise.resolve()
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Fila única das respostas automáticas — do fluxo antigo e dos workflows. Uma mensagem por
+ * vez, com intervalo, para a ordem chegar certa e a uazapi não receber rajadas.
+ * `task` nunca derruba a fila: o erro vai para `onError`.
+ */
+export function serialSend(task, onError) {
+  replyQueue = replyQueue
+    .then(task)
+    .catch((err) => onError?.(err))
+    .then(() => sleep(REPLY_GAP_MS))
+}
 
 function enqueueReply(ctx, ct, to, label, build) {
-  replyQueue = replyQueue
-    .then(async () => {
+  serialSend(
+    async () => {
       const { send, payload } = build()
       const res = await send({ number: to, delay: 1500, ...payload })
       const id = res?.messageid || stripOwner(res?.id)
       if (id) (ct.flow.msgIds ||= []).push(id)
       persist(ctx)
-    })
-    .catch((err) => {
+    },
+    (err) => {
       log(ctx, 'error', `Falha ao enviar ${label} para ${ct.number}: ${err.message}`)
       persist(ctx)
-    })
-    .then(() => sleep(REPLY_GAP_MS))
+    },
+  )
 }
 
 function applyInterest(ctx, ct, yes, to) {
@@ -480,7 +495,7 @@ function applyConfirmation(ctx, ct, confirm, to) {
 
 // ---- Webhook de leads qualificados ------------------------------------------------------
 
-const WEBHOOK_RETRY_DELAYS = [15_000, 60_000, 300_000] // depois da 1ª tentativa
+export const WEBHOOK_RETRY_DELAYS = [15_000, 60_000, 300_000] // depois da 1ª tentativa
 
 /** POST JSON com timeout. Nunca lança: devolve { ok, status, body, error }. */
 export async function postJson(url, payload) {
@@ -575,7 +590,7 @@ export function resumePendingWebhooks() {
 const seen = new Set()
 const recent = []
 
-function remember(entry) {
+export function remember(entry) {
   recent.unshift({ at: Date.now(), ...entry })
   if (recent.length > 30) recent.length = 30
 }

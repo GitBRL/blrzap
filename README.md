@@ -1,6 +1,6 @@
 # Disparos WhatsApp (uazapi)
 
-Painel para disparo em massa no WhatsApp pela API da [uazapi](https://docs.uazapi.com): importe um CSV, filtre os contatos, escreva um template personalizado com as colunas da planilha e acompanhe o envio em tempo real. Opcionalmente, envie botões de interesse e qualifique os leads pelo faturamento.
+Painel para disparo em massa no WhatsApp pela API da [uazapi](https://docs.uazapi.com): importe um CSV ou uma planilha do Excel, filtre os contatos, escreva um template personalizado com as colunas da planilha e acompanhe o envio em tempo real. Opcionalmente, ligue a campanha a um **workflow**: botões, perguntas, condições e webhooks que seguem conforme cada resposta do contato.
 
 - **Frontend:** Vite + React (`client/`)
 - **Backend:** Node + Express (`server/`) — guarda o token da uazapi e executa a fila de envio
@@ -38,9 +38,11 @@ O painel abre numa tela de login (usuário `admin` + essa senha). A sessão fica
 
 > Sem `ADMIN_PASSWORD`, o painel fica **sem login** (o log avisa). Não publique assim: qualquer pessoa com o endereço conseguiria enviar mensagens pelo seu número.
 
-## CSV
+## Contatos: CSV, XLS ou XLSX
 
-- Cabeçalho na primeira linha; separador `,` ou `;` (detectado automaticamente); UTF-8 ou o padrão do Excel (Windows-1252).
+- Cabeçalho na primeira linha (na planilha, a primeira linha preenchida).
+- **CSV:** separador `,` ou `;` (detectado automaticamente); UTF-8 ou o padrão do Excel (Windows-1252).
+- **XLS / XLSX:** cada aba com dados vira uma opção, e a primeira vem selecionada. Telefones e documentos gravados como número saem inteiros (o Excel mostra `5,51E+12`), decimais saem com vírgula, porcentagens como `15%` e datas como `dd/mm/aaaa`. Colunas repetidas ganham sufixo (`nome (2)`); colunas sem título e sem dados são ignoradas. A leitura é feita no navegador, e a biblioteca só é baixada quando uma planilha é escolhida.
 - A coluna de telefone é detectada pelo nome (`telefone`, `celular`, `whatsapp`…) e pode ser trocada na tela.
 - Números sem DDI recebem o DDI padrão (55). Inválidos e duplicados são ignorados e aparecem no relatório.
 - Há um modelo em `client/public/exemplo-contatos.csv` (link “Baixar CSV de exemplo” na tela).
@@ -76,37 +78,30 @@ A versão da uazapi é lida no `/status` público dela e aparece na tela de conf
 - **Imagem:** vai no topo da mensagem com botões em qualquer versão. O app envia nos campos `imageButton` (versões < 2.6) e `file` (2.6+).
 - **Vídeo e documento:** só aparecem no topo dos botões a partir da **uazapi 2.6.0**. Em versões anteriores, o app envia o arquivo numa mensagem própria **logo antes** da mensagem com botões. A tela avisa e a prévia mostra assim.
 
-## Botões de interesse e qualificação
+## Workflows
 
-Em **Mensagem → Com botões de interesse**, a campanha envia imagem (ou vídeo/documento) + texto + dois botões (`/send/menu`):
+Na aba **Workflows** você monta, num canvas, o caminho das mensagens que seguem o disparo. Na campanha, escolha **Mensagem → Com workflow** e o template. A campanha guarda uma **cópia** do workflow: editar o template depois não muda campanhas já criadas.
 
-1. **“Tenho interesse”** → o contato recebe a pergunta de faturamento com as faixas configuradas (até 3 faixas viram botões; acima disso, uma lista).
-2. Ao escolher a faixa, o contato é marcado como **qualificado** se a faixa estiver marcada como tal (padrão: só **acima de R$ 80 mil**). Qualificados recebem a mensagem de próximo contato. Os demais recebem uma recusa educada (“infelizmente não seguiremos com uma proposta neste momento…”), editável na tela. Vale a primeira faixa informada: trocar de resposta depois não muda a classificação.
-3. **Confirmação de dados (qualificados):** o lead recebe um resumo como *Nome / E-mail / Telefone* com os botões **Confirmar dados** e **Alterar dados**. Os valores vêm das colunas do CSV (ou do número de WhatsApp). Campos vazios são perguntados antes do resumo. Em **Alterar dados**, cada campo é perguntado de novo, com validação de e-mail e telefone, e o resumo volta a aparecer. A **mensagem final** só é enviada depois da confirmação e pode usar os dados confirmados (`{{Nome}}`, `{{E-mail}}`…). A etapa pode ser desligada e os campos são configuráveis (até 8).
-4. **“Não tenho interesse”** → recebe a resposta de agradecimento (opcional).
+Na primeira vez, o painel cria o template **Qualificação por faturamento**, que reproduz o antigo “Com botões de interesse” (botões → faixa de faturamento → confirmação de dados → mensagem final; recusa para não qualificados; agradecimento para sem interesse). Se o navegador tinha esse fluxo personalizado, a aba Workflows oferece importá-lo.
 
-### Webhook de leads qualificados (ex.: Clint)
+| Bloco | O que faz | Saídas |
+|---|---|---|
+| **Disparo** | A mensagem da campanha (texto e mídia vêm da campanha). Pode ter opções. | uma por opção, ou “Seguir” |
+| **Mensagem** | Texto (e mídia por link público), com ou sem opções | uma por opção, ou “Seguir” |
+| **Pergunta aberta** | Pergunta e guarda a resposta digitada numa variável. Valida texto, e-mail, telefone ou número. | “Respondeu” |
+| **Confirmar dados** | Usa o que já existe (planilha, respostas, número), pergunta o que falta e mostra o resumo com Confirmar/Alterar | “Confirmou” |
+| **Condição** | Regras sobre colunas da planilha e respostas (mesmos operadores dos filtros) | “Sim” / “Não” |
+| **Webhook** | POST em JSON com uma tabela chave → valor (ex.: Clint), em qualquer ponto do caminho | “Seguir” |
 
-Em **Botões e qualificação → Enviar leads qualificados para um webhook**, informe a URL (por exemplo, o webhook de entrada do Clint) e monte os **dados enviados** como uma tabela *chave → valor*. O valor pode ser texto fixo ou variáveis:
+- **Opções:** até 3 viram botões; de 4 a 10, lista. O contato também pode digitar o número ou o texto da opção (e “sim”/“não” quando dá para saber qual é). Cada opção pode ter uma **etiqueta** (ex.: “Qualificado”), que vira contagem, filtro e export nos resultados, e a escolha pode ser guardada numa variável.
+- **Sem resposta:** blocos que esperam resposta podem ter um prazo (minutos, horas ou dias). Passado o prazo, o contato segue pela saída “Sem resposta”, por exemplo para um lembrete que volta à pergunta. Respeita a janela de envio da campanha, não sai de campanha pausada ou cancelada, e cada contato recebe no máximo 5.
+- **Variáveis:** `{{coluna}}` da planilha, as respostas guardadas, os dados confirmados (`{{Nome}}`, `{{E-mail}}`…, mais `{{data_confirmacao}}` e `{{dados_alterados}}`) e `{{whatsapp}}`/`{{campanha}}`. No webhook, telefones vão só com dígitos e DDI.
+- **Webhook:** erros temporários (sem conexão, 408, 429, 5xx) são tentados de novo após 15 s, 1 min e 5 min; envios pendentes são retomados se o servidor reiniciar; **Reenviar falhas** fica na aba Respostas. **Enviar teste** (no bloco) manda um exemplo com `"teste": true`.
+- **Regras do editor:** uma saída leva a um bloco só; saída sem seta encerra o caminho; nenhuma seta volta ao disparo; laço sem nenhum bloco que espere resposta é recusado. Workflow com problemas pode ser salvo como rascunho, mas não pode ser usado em campanha.
+- **Resultados:** a aba **Respostas** mostra quantos entraram, responderam, estão aguardando e chegaram ao fim; as etiquetas; e cada bloco na ordem do caminho, com quantos passaram, quantos estão parados nele, a escolha de cada opção e os “sem resposta”. O export inclui a etapa atual, as etiquetas, cada resposta guardada (`resposta_<variável>`) e o status de cada webhook.
+- Use **Enviar teste** na campanha: com workflow, o teste percorre o caminho inteiro no seu número.
 
-| Variável | Conteúdo |
-|---|---|
-| `{{Nome}}`, `{{E-mail}}`, `{{Telefone}}`… | dados confirmados pelo lead (telefones só com dígitos e DDI) |
-| `{{empresa}}`, `{{cidade}}`… | qualquer coluna do CSV |
-| `{{whatsapp}}`, `{{faixa_faturamento}}`, `{{campanha}}`, `{{data_confirmacao}}`, `{{dados_alterados}}` | dados do fluxo |
-
-Também vale o valor reserva `{{cidade|não informado}}`, e há a opção de mandar todas as colunas do CSV (`planilha_*`).
-
-- O POST (JSON) sai quando o lead **confirma os dados**. Se a etapa de confirmação estiver desligada, sai quando ele escolhe uma faixa qualificada.
-- **Enviar lead de teste** manda um exemplo com `"teste": true`, para mapear os campos no CRM antes do disparo.
-- Erros temporários (sem conexão, 408, 429, 5xx) são tentados de novo após 15 s, 1 min e 5 min. Erros 4xx não são repetidos automaticamente. A aba **Respostas** mostra enviados e falhas e tem o botão **Reenviar falhas**. O export inclui `webhook_status` e `webhook_erro`.
-- Envios pendentes são retomados se o servidor reiniciar.
-
-O contato também pode responder digitando: `sim`/`1` ou `não`/`2` na primeira pergunta, o número da faixa na segunda e `confirmar`/`1` ou `alterar`/`2` no resumo dos dados.
-
-O export dos qualificados inclui `dados_confirmados`, `dados_alterados` e uma coluna `confirmado_<campo>` para cada dado.
-
-A aba **Respostas** da campanha mostra o funil (enviadas → interessados → informaram faturamento → qualificados), a distribuição por faixa e exporta **só os qualificados** ou **só os interessados** em CSV. Use **Enviar teste** antes: com botões, o teste roda o fluxo completo no seu número.
+Campanhas criadas antes dos workflows (com “botões de interesse”) continuam funcionando e mostrando os resultados como antes.
 
 ### Como as respostas chegam
 
@@ -152,12 +147,16 @@ Envie apenas para contatos que autorizaram receber mensagens. Comece com volumes
 | GET/POST | `/api/campaigns` | lista / cria campanha |
 | GET | `/api/campaigns/:id` | resumo + log de atividade |
 | GET | `/api/campaigns/:id/contacts` | contatos paginados (`status`, `flow`, `q`, `page`) |
-| GET | `/api/campaigns/:id/export` | relatório CSV (`?only=qualified` ou `?only=interested`) |
+| GET | `/api/campaigns/:id/export` | relatório CSV (`?only=` com um filtro: `tag:Qualificado`, `replied`, `done`…) |
 | GET | `/api/responses` | status do recebimento de respostas + últimas respostas |
 | POST | `/api/webhook/uazapi` | webhook opcional da uazapi |
 | POST | `/api/campaigns/:id/{pause,resume,cancel,retry-failed,start-now}` | controle |
 | POST | `/api/campaigns/:id/reschedule` | reagenda (`{ "startAt": <timestamp ms> }`) |
 | DELETE | `/api/campaigns/:id` | exclui campanha |
+| GET/POST | `/api/workflows` | lista / cria workflow |
+| GET/PUT/DELETE | `/api/workflows/:id` | lê / salva / exclui workflow |
+| POST | `/api/workflows/:id/duplicate` | duplica |
+| POST | `/api/workflows/webhook-test` | envia um exemplo do bloco de webhook (`{ workflow, nodeId }`) |
 
 
 
