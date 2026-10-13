@@ -26,7 +26,16 @@ import { parseNumber } from '../shared/filters.js'
 import { normalizePhone } from '../shared/phone.js'
 import { DEFAULT_TIMEZONE, isValidTimeZone, zonedParts, zonedToUtc } from '../shared/schedule.js'
 import { renderTemplate } from '../shared/template.js'
-import { appendToCampaign, createSystemCampaign, onContactProcessed, skipPendingContacts } from './campaigns.js'
+import {
+  appendToCampaign,
+  countsOf,
+  createSystemCampaign,
+  onContactProcessed,
+  pauseCampaign,
+  resumeCampaign,
+  retryFailed,
+  skipPendingContacts,
+} from './campaigns.js'
 import { DATA_DIR } from './env.js'
 import { ValidationError } from './errors.js'
 import { sendMail } from './mailer.js'
@@ -821,4 +830,128 @@ export function exportRows() {
       pago_em: t.paidAt ? new Date(t.paidAt).toLocaleString('pt-BR', { timeZone: tz() }) : '',
     }
   })
+}
+
+// ---- Monitoramento dos envios (aba Cobrança → Envios) -------------------------------------
+
+const dayCampaign = (day) => listCampaigns().find((c) => c.source?.type === 'regua' && c.source.date === day)
+
+const SEND_STATUS = { pending: 'pending', sent: 'sent', failed: 'failed', invalid: 'failed', skipped: 'skipped' }
+
+/** Todos os envios de um dia (WhatsApp da campanha interna + e-mails das etapas), com resumo. */
+export function dunningSends({ date, status = '', channel = '', q = '', page = 1, pageSize = 50 } = {}) {
+  const day = parseDateKey(date) || today()
+  const campaign = dayCampaign(day)
+  const items = []
+
+  for (const ct of campaign?.contacts || []) {
+    const t = byId(ct.ref?.titleId)
+    const stage = ct.ref?.stage ? stageByKey(ct.ref.stage) : null
+    const what =
+      ct.ref?.kind === 'confirm' ? 'Confirmação de promessa' : ct.ref?.kind === 'broken' ? 'Promessa não cumprida' : stage ? stage.name : 'Etapa removida'
+    items.push({
+      id: `w${ct.i}`,
+      channel: 'whatsapp',
+      titleId: ct.ref?.titleId || null,
+      nome: t?.nome || ct.vars?.nome || '',
+      to: ct.number || ct.raw,
+      stage: stage ? stageLabel(stage.offset) : '',
+      what,
+      status: SEND_STATUS[ct.status] || ct.status,
+      at: ct.processedAt,
+      error: ct.status === 'sent' ? null : ct.error,
+      text: ct.text,
+    })
+  }
+
+  for (const t of state.titles) {
+    for (const [key, step] of Object.entries(t.steps)) {
+      if (step.date !== day) continue
+      const stage = stageByKey(key)
+      for (const ch of ['email', 'internal']) {
+        const info = step.channels?.[ch]
+        if (!info) continue
+        items.push({
+          id: `${ch}:${t.id}:${key}`,
+          channel: ch,
+          titleId: t.id,
+          nome: t.nome,
+          to: ch === 'email' ? t.email : stage?.internal.to || '',
+          stage: stage ? stageLabel(stage.offset) : '',
+          what: stage ? stage.name : key,
+          status: info.status,
+          at: info.at || null,
+          error: info.status === 'sent' ? null : info.error || null,
+          text: null,
+        })
+      }
+    }
+  }
+
+  const count = (list) => {
+    const c = { total: list.length, sent: 0, failed: 0, pending: 0, skipped: 0 }
+    for (const i of list) c[i.status] = (c[i.status] || 0) + 1
+    return c
+  }
+  const summary = {
+    date: day,
+    whatsapp: count(items.filter((i) => i.channel === 'whatsapp')),
+    email: count(items.filter((i) => i.channel !== 'whatsapp')),
+    campaign: campaign
+      ? {
+          id: campaign.id,
+          status: campaign.status,
+          nextSendAt: campaign.nextSendAt,
+          pauseReason: campaign.pauseReason || null,
+          scheduledFor: campaign.status === 'scheduled' ? campaign.scheduledFor : null,
+          scheduleReason: campaign.status === 'scheduled' ? campaign.scheduleReason : null,
+          lastError: campaign.lastError,
+          counts: countsOf(campaign),
+        }
+      : null,
+    tasksOpen: state.tasks.filter((x) => x.status === 'open').length,
+    runs: state.runs,
+  }
+
+  const query = String(q || '').trim().toLowerCase()
+  let list = items
+  if (status) list = list.filter((i) => i.status === status)
+  if (channel === 'whatsapp') list = list.filter((i) => i.channel === 'whatsapp')
+  if (channel === 'email') list = list.filter((i) => i.channel !== 'whatsapp')
+  if (query) list = list.filter((i) => [i.nome, i.to, i.what].some((v) => String(v || '').toLowerCase().includes(query)))
+  // Na fila primeiro; depois os mais recentes
+  list.sort((a, b) => (b.status === 'pending' ? 1 : 0) - (a.status === 'pending' ? 1 : 0) || (b.at || 0) - (a.at || 0))
+  const size = Math.min(200, Math.max(1, Number(pageSize) || 50))
+  const p = Math.max(1, Number(page) || 1)
+  return { summary, total: list.length, page: p, pageSize: size, items: list.slice((p - 1) * size, p * size) }
+}
+
+/** Pausar / retomar / reenviar falhas dos envios de WhatsApp de um dia. */
+export function sendsAction(action, date) {
+  const day = parseDateKey(date) || today()
+  if (action === 'reenviar-emails') return { count: retryFailedEmails() }
+  const c = dayCampaign(day)
+  if (!c) throw new ValidationError('Não há envios de WhatsApp da régua neste dia.')
+  if (action === 'pausar') {
+    if (!['running', 'queued', 'scheduled'].includes(c.status)) throw new ValidationError('Não há envios em andamento para pausar.')
+    pauseCampaign(c)
+  } else if (action === 'retomar') {
+    if (c.status !== 'paused') throw new ValidationError('Os envios não estão pausados.')
+    resumeCampaign(c)
+  }
+  else if (action === 'reenviar-whatsapp') {
+    const failed = c.contacts.filter((ct) => ct.status === 'failed')
+    if (!failed.length) throw new ValidationError('Não há mensagens de WhatsApp com falha neste dia.')
+    retryFailed(c)
+    for (const ct of failed) {
+      const step = ct.ref?.stage && byId(ct.ref.titleId)?.steps[ct.ref.stage]
+      if (step?.channels?.whatsapp) {
+        step.channels.whatsapp = { status: 'pending' }
+        refreshStep(step)
+      }
+    }
+    save()
+    return { count: failed.length }
+  } else throw Object.assign(new Error('Ação desconhecida.'), { status: 404 })
+  return { ok: true }
 }

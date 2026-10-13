@@ -131,7 +131,15 @@ Todas as etapas, os textos, os canais e os marcos são editáveis em **Etapas da
 
 - **Títulos:** importe um CSV com cliente, telefone, e-mail, vencimento, valor, link do boleto, link de pagamento, Pix e status (modelo em `client/public/exemplo-titulos.csv`). Reimportar a planilha atualiza os títulos pelo número, dá baixa nos que vierem como pagos e reinicia a régua de quem teve o vencimento alterado. Colunas ausentes na planilha não apagam dados.
 - **Execução diária:** no horário configurado (padrão 09:00, horário de Brasília), cada título em aberto recebe a etapa do dia. Quem entra atrasado recebe só a etapa mais recente. Etapas que passaram há mais tempo que a tolerância (padrão 3 dias) são puladas. Há também **Executar agora**.
-- **WhatsApp:** os envios do dia formam a campanha “Régua de cobrança — dd/mm” (aba Campanhas), com o mesmo ritmo, janela de horário, pausa e relatório.
+- **WhatsApp do financeiro:** em Cobrança → Configurações, conecte uma **instância uazapi própria** (outro número). Ela tem fila e ritmo próprios e envia **em paralelo** com as campanhas, sem atrasar nem ser atrasada por elas. Sem ela, a régua usa a instância das campanhas e divide a fila com elas.
+- **Envios (aba Cobrança → Envios):** acompanhamento por dia, só dentro de Cobrança. Mostra:
+  - o progresso do WhatsApp (enviados, na fila, falhas) e o próximo envio;
+  - a situação dos e-mails;
+  - a lista de cada envio (cliente, etapa, canal, situação e erro), com filtros;
+  - os botões **Pausar/Retomar envios**, **Reenviar falhas de WhatsApp** e **Reenviar e-mails com falha**;
+  - o histórico das execuções, automáticas e manuais.
+
+  Os envios da régua não aparecem na aba Campanhas.
 - **E-mail:** via SMTP (Cobrança → Configurações, com botão de teste). Se o SMTP falhar, os e-mails podem ser reenviados depois.
 - **Ligações:** etapas com ligação viram tarefas na aba **Ligações**, com botões para ligar e abrir o WhatsApp. A equipe marca as tentativas e o resultado:
   - **Promessa (com data):** suspende a régua até a data combinada e envia uma confirmação. Se a data passar sem pagamento, sai o aviso de promessa não cumprida e a régua continua.

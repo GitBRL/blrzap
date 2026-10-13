@@ -81,3 +81,49 @@ export function publicSmtp() {
   const { pass, ...rest } = getSmtp()
   return { ...rest, hasPass: Boolean(pass), configured: Boolean(rest.host && rest.fromEmail) }
 }
+
+// ---- Instância uazapi do financeiro (régua de cobrança) ---------------------------------
+
+export function getFinanceConfig() {
+  const f = saved.financeiro || {}
+  return {
+    baseUrl: (f.baseUrl || process.env.UAZAPI_FIN_URL || '').trim().replace(/\/+$/, ''),
+    token: (f.token || process.env.UAZAPI_FIN_TOKEN || '').trim(),
+  }
+}
+
+export const hasFinanceInstance = () => {
+  const f = getFinanceConfig()
+  return Boolean(f.baseUrl && f.token)
+}
+
+export function setFinanceConfig({ baseUrl, token }) {
+  const next = { ...(saved.financeiro || {}) }
+  if (typeof baseUrl === 'string') {
+    const url = baseUrl.trim().replace(/\/+$/, '')
+    if (url && !/^https?:\/\/[^\s/]+/i.test(url)) throw new Error('URL inválida. Exemplo: https://seusubdominio.uazapi.com')
+    next.baseUrl = url
+  }
+  if (typeof token === 'string' && token.trim()) next.token = token.trim()
+  saved.financeiro = next
+  fs.writeFileSync(FILE, JSON.stringify(saved, null, 2), { mode: 0o600 })
+}
+
+export function clearFinanceConfig() {
+  delete saved.financeiro
+  fs.writeFileSync(FILE, JSON.stringify(saved, null, 2), { mode: 0o600 })
+}
+
+export function publicFinanceConfig() {
+  const { baseUrl, token } = getFinanceConfig()
+  return { baseUrl, hasToken: Boolean(token), tokenPreview: token ? `${token.slice(0, 4)}…${token.slice(-4)}` : '', configured: Boolean(baseUrl && token) }
+}
+
+/**
+ * Instância usada pela régua: a do financeiro, quando configurada; senão, a principal.
+ * O `label` aparece nos erros para deixar claro de qual instância é o problema.
+ */
+export function dunningConnection() {
+  if (hasFinanceInstance()) return { ...getFinanceConfig(), label: 'Instância do financeiro', kind: 'financeiro' }
+  return { ...getConfig(), kind: 'principal' }
+}

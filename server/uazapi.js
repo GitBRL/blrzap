@@ -26,10 +26,15 @@ function errorMessage(data, status) {
   return (typeof data === 'string' && data.trim().slice(0, 300)) || `HTTP ${status}`
 }
 
-async function request(path, { method = 'GET', body, timeout = 30_000 } = {}) {
-  const { baseUrl, token } = getConfig()
+/**
+ * Chamada à uazapi. `conn` = { baseUrl, token, label? } escolhe a instância (padrão: a principal,
+ * das campanhas). O `label` identifica a instância nas mensagens de erro (ex.: financeiro).
+ */
+async function request(path, { method = 'GET', body, timeout = 30_000 } = {}, conn = getConfig()) {
+  const { baseUrl, token } = conn
+  const prefix = conn.label ? `${conn.label}: ` : ''
   if (!baseUrl || !token) {
-    throw new UazapiError('Configure a URL do servidor e o token da instância uazapi.', { kind: 'config' })
+    throw new UazapiError(`${prefix}configure a URL do servidor e o token da instância uazapi.`, { kind: 'config' })
   }
 
   let res
@@ -42,9 +47,9 @@ async function request(path, { method = 'GET', body, timeout = 30_000 } = {}) {
     })
   } catch (err) {
     if (err.name === 'TimeoutError') {
-      throw new UazapiError('Tempo esgotado aguardando a uazapi (a mensagem pode ter sido enviada).', { kind: 'timeout' })
+      throw new UazapiError(`${prefix}tempo esgotado aguardando a uazapi (a mensagem pode ter sido enviada).`, { kind: 'timeout' })
     }
-    throw new UazapiError(`Falha de conexão com a uazapi: ${err.cause?.code || err.message}`, { kind: 'network' })
+    throw new UazapiError(`${prefix}falha de conexão com a uazapi: ${err.cause?.code || err.message}`, { kind: 'network' })
   }
 
   const text = await res.text()
@@ -57,20 +62,20 @@ async function request(path, { method = 'GET', body, timeout = 30_000 } = {}) {
 
   if (!res.ok) {
     const retryAfter = Number(res.headers.get('retry-after')) || null
-    throw new UazapiError(errorMessage(data, res.status), { status: res.status, data, retryAfter })
+    throw new UazapiError(`${prefix}${errorMessage(data, res.status)}`, { status: res.status, data, retryAfter })
   }
   return data
 }
 
-export const instanceStatus = () => request('/instance/status', { timeout: 15_000 })
+export const instanceStatus = (conn) => request('/instance/status', { timeout: 15_000 }, conn)
 
 // ---- Versão do servidor (GET /status é público) ------------------------------------------
 
 let versionCache = { baseUrl: '', value: null, expires: 0 }
 
 /** Versão da uazapi em execução (ex.: "2.4.2"), com cache de 10 min. null se não conseguir ler. */
-export async function serverVersion() {
-  const { baseUrl } = getConfig()
+export async function serverVersion(conn = getConfig()) {
+  const { baseUrl } = conn
   if (!baseUrl) return null
   if (versionCache.baseUrl === baseUrl && versionCache.expires > Date.now()) return versionCache.value
   let value = null
@@ -95,19 +100,21 @@ export function versionAtLeast(version, min) {
 }
 
 /** Vídeo e documento no topo de botões só existem a partir da uazapi 2.6.0. */
-export const supportsButtonMedia = async () => versionAtLeast(await serverVersion(), '2.6.0')
+export const supportsButtonMedia = async (conn) => versionAtLeast(await serverVersion(conn), '2.6.0')
 
-export const checkNumbers = (numbers) => request('/chat/check', { method: 'POST', body: { numbers }, timeout: 60_000 })
+// `conn` opcional em todas: sem ele, vale a instância principal (campanhas)
+export const checkNumbers = (numbers, conn) =>
+  request('/chat/check', { method: 'POST', body: { numbers }, timeout: 60_000 }, conn)
 
-export const sendText = (payload) =>
-  request('/send/text', { method: 'POST', body: payload, timeout: 60_000 + (payload.delay || 0) })
+export const sendText = (payload, conn) =>
+  request('/send/text', { method: 'POST', body: payload, timeout: 60_000 + (payload.delay || 0) }, conn)
 
-export const sendMedia = (payload) =>
-  request('/send/media', { method: 'POST', body: payload, timeout: 120_000 + (payload.delay || 0) })
+export const sendMedia = (payload, conn) =>
+  request('/send/media', { method: 'POST', body: payload, timeout: 120_000 + (payload.delay || 0) }, conn)
 
 /** Botões, listas e enquetes (type: button | list | poll). */
-export const sendMenu = (payload) =>
-  request('/send/menu', { method: 'POST', body: payload, timeout: 120_000 + (payload.delay || 0) })
+export const sendMenu = (payload, conn) =>
+  request('/send/menu', { method: 'POST', body: payload, timeout: 120_000 + (payload.delay || 0) }, conn)
 
 /**
  * Erros que tornam inútil continuar o disparo (todo envio seguinte falharia).

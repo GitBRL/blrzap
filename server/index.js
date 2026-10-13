@@ -4,9 +4,19 @@ import path from 'node:path'
 import express from 'express'
 import Papa from 'papaparse'
 import { normalizePhone } from '../shared/phone.js'
-import { publicConfig, publicSmtp, setConfig, setSmtp } from './config.js'
+import {
+  clearFinanceConfig,
+  dunningConnection,
+  publicConfig,
+  publicFinanceConfig,
+  publicSmtp,
+  setConfig,
+  setFinanceConfig,
+  setSmtp,
+} from './config.js'
 import { sendMail, verifySmtp } from './mailer.js'
 import {
+  dunningSends,
   dunningStats,
   exportRows,
   flushDunning,
@@ -18,6 +28,7 @@ import {
   retryFailedEmails,
   runDunning,
   saveDunningConfig,
+  sendsAction,
   startDunning,
   titleAction,
   titleDetail,
@@ -302,7 +313,8 @@ api.post('/test-send', async (req, res) => {
 
 // ---- Campanhas -------------------------------------------------------------------
 
-api.get('/campaigns', (req, res) => res.json(listCampaigns().map(summarize)))
+// A campanha interna da régua de cobrança é acompanhada só pela aba Cobrança
+api.get('/campaigns', (req, res) => res.json(listCampaigns().filter((c) => !c.source).map(summarize)))
 
 api.post('/campaigns', (req, res) => {
   const c = createCampaign(req.body || {})
@@ -619,6 +631,49 @@ api.post('/regua/titulos/:id/:action', (req, res) => res.json(titleAction(req.pa
 api.get('/regua/tarefas', (req, res) => res.json(listTasks({ status: String(req.query.status || 'open') })))
 
 api.post('/regua/tarefas/:id', (req, res) => res.json(resolveTask(req.params.id, req.body || {})))
+
+// Envios do dia (WhatsApp + e-mails) e controles
+api.get('/regua/envios', (req, res) => res.json(dunningSends(req.query)))
+
+api.post('/regua/envios/:action', (req, res) => res.json(sendsAction(req.params.action, req.body?.date)))
+
+// Instância uazapi do financeiro (separada da das campanhas)
+async function financeInstance() {
+  const conn = dunningConnection()
+  const info = { ...publicFinanceConfig(), using: conn.kind }
+  if (!conn.baseUrl || !conn.token) return { ...info, state: 'unconfigured', connected: false }
+  try {
+    const data = await instanceStatus(conn)
+    const inst = data?.instance || {}
+    return {
+      ...info,
+      state: inst.status || (data?.status?.connected ? 'connected' : 'disconnected'),
+      connected: Boolean(data?.status?.connected && data?.status?.loggedIn !== false),
+      profileName: inst.profileName || '',
+      number: data?.status?.jid?.user || '',
+    }
+  } catch (err) {
+    return { ...info, state: 'error', connected: false, error: err.message }
+  }
+}
+
+api.get('/regua/instancia', async (req, res) => res.json(await financeInstance()))
+
+api.put('/regua/instancia', async (req, res) => {
+  try {
+    setFinanceConfig(req.body || {})
+  } catch (err) {
+    throw new ValidationError(err.message)
+  }
+  kick()
+  res.json(await financeInstance())
+})
+
+api.delete('/regua/instancia', async (req, res) => {
+  clearFinanceConfig()
+  kick()
+  res.json(await financeInstance())
+})
 
 api.get('/regua/exportar', (req, res) => {
   const rows = exportRows()

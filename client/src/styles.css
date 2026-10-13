@@ -2458,6 +2458,96 @@ textarea {
   margin-top: 18px;
 }
 
+.chip.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.chip.muted-chip {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.envios-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field.inline input {
+  width: auto;
+}
+
+.instance-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.instance-strip svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.instance-strip.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.instance-strip.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.instance-strip.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.envios-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.envios-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.envios-block p {
+  margin: 0;
+}
+
+.envios-block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.channel-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 /* ---------- Modal ---------- */
 
 .modal-backdrop {
@@ -2603,7 +2693,8 @@ textarea {
   }
 
   .grid-3,
-  .variant {
+  .variant,
+  .envios-summary {
     grid-template-columns: minmax(0, 1fr);
   }
 

@@ -7,6 +7,7 @@ import Titulos from './Titulos.jsx'
 import Ligacoes from './Ligacoes.jsx'
 import Etapas from './Etapas.jsx'
 import ConfigRegua from './ConfigRegua.jsx'
+import Envios from './Envios.jsx'
 
 function Tile({ label, value, sub, tone = 'muted', onClick }) {
   return (
@@ -148,6 +149,7 @@ export default function Cobranca({ active }) {
       <div className="subtabs">
         {[
           ['titulos', 'Títulos'],
+          ['envios', 'Envios'],
           ['ligacoes', `Ligações${stats.tasksOpen ? ` (${stats.tasksOpen})` : ''}`],
           ['etapas', 'Etapas da régua'],
           ['config', 'Configurações'],
@@ -180,6 +182,7 @@ export default function Cobranca({ active }) {
       )}
 
       {sub === 'titulos' && <Titulos active={active} filter={titleFilter} setFilter={setTitleFilter} version={version} onChanged={changed} />}
+      {sub === 'envios' && <Envios active={active} version={version} onChanged={changed} />}
       {sub === 'ligacoes' && <Ligacoes active={active} version={version} onChanged={changed} />}
       {sub === 'etapas' && <Etapas config={draft} setConfig={editConfig} />}
       {sub === 'config' && <ConfigRegua config={draft} setConfig={editConfig} />}

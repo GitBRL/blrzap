@@ -16,6 +16,7 @@ import {
 import { addCampaign, appendLog as log, getCampaign, listCampaigns, readUploadBase64, saveCampaign, uploadInfo } from './store.js'
 import { checkNumbers, fatalReason, sendMedia, sendMenu, sendText, supportsButtonMedia, UazapiError } from './uazapi.js'
 import { publicBaseUrl } from './env.js'
+import { dunningConnection, getConfig } from './config.js'
 import { ValidationError } from './errors.js'
 import { flowCounts, interestPayload, normalizeFlow } from './flow.js'
 import { onInitialSent, startMenuPayload, workflowCounts } from './workflow.js'
@@ -160,7 +161,7 @@ function sendFailure(res) {
  * ou os botões do bloco de disparo de um workflow). Repete em caso de 429. `flowKey`
  * identifica a campanha nos IDs dos botões.
  */
-export async function deliver({ number, template, vars, media, settings, flow, workflow, flowKey }) {
+export async function deliver({ number, template, vars, media, settings, flow, workflow, flowKey, conn }) {
   const text = renderTemplate(template, vars)
   const common = {
     number,
@@ -184,7 +185,7 @@ export async function deliver({ number, template, vars, media, settings, flow, w
   let payload
   let preMedia = null // mídia enviada antes dos botões (uazapi < 2.6 não aceita vídeo/documento no botão; lista nunca aceita)
   if (menu) {
-    const separate = Boolean(media) && ((start && usesList(start)) || (media.type !== 'image' && !(await supportsButtonMedia())))
+    const separate = Boolean(media) && ((start && usesList(start)) || (media.type !== 'image' && !(await supportsButtonMedia(conn))))
     if (separate) preMedia = { ...common, ...mediaBody(media, file) }
     payload = { ...common, ...menu({ text, file, media, headerMedia: !separate }) }
     if (separate) payload.delay = 1000
@@ -195,8 +196,8 @@ export async function deliver({ number, template, vars, media, settings, flow, w
   }
 
   try {
-    if (preMedia) await sendChecked(sendMedia, preMedia)
-    const res = await sendChecked(menu ? sendMenu : media ? sendMedia : sendText, payload)
+    if (preMedia) await sendChecked(sendMedia, preMedia, conn)
+    const res = await sendChecked(menu ? sendMenu : media ? sendMedia : sendText, payload, conn)
     return { text, messageId: res?.messageid || res?.id || null }
   } catch (err) {
     err.renderedText = text
@@ -212,10 +213,10 @@ function mediaBody(media, file) {
 }
 
 /** Envia e confere a resposta. Repete em 429 (a mensagem não foi aceita, então é seguro). */
-async function sendChecked(send, payload) {
+async function sendChecked(send, payload, conn) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await send(payload)
+      const res = await send(payload, conn)
       const failure = sendFailure(res)
       if (failure) throw new UazapiError(failure, { data: res })
       return res
@@ -540,10 +541,20 @@ export function retryFailed(c) {
 
 // ---- Executor -----------------------------------------------------------------
 
-let activeId = null
+// Uma fila por instância (número de WhatsApp): cada uma envia uma campanha por vez, com o
+// próprio intervalo entre mensagens. Instâncias diferentes (ex.: campanhas e financeiro)
+// enviam em paralelo, sem uma atrasar a outra.
 let shuttingDown = false
-let inFlight = null // envio em andamento (aguardado no desligamento)
-let lastSendAt = 0 // global: o intervalo vale entre campanhas, pois o número é o mesmo
+const lanes = new Map()
+
+/** Instância que envia a campanha: a régua usa a do financeiro (quando configurada). */
+export const connectionOf = (c) => (c.source?.type === 'regua' ? dunningConnection() : getConfig())
+
+function laneOf(conn) {
+  const key = `${conn.baseUrl}|${conn.token}`
+  if (!lanes.has(key)) lanes.set(key, { key, activeId: null, inFlight: null, lastSendAt: 0 })
+  return lanes.get(key)
+}
 
 /** Coloca na fila as campanhas cujo horário agendado (ou abertura da janela) chegou. */
 function releaseScheduled() {
@@ -569,22 +580,25 @@ export function startScheduler() {
 }
 
 export function kick() {
-  if (activeId || shuttingDown) return
-  const next = listCampaigns()
+  if (shuttingDown) return
+  const queued = listCampaigns()
     .filter((c) => c.status === 'queued')
-    .sort((a, b) => a.queuedAt - b.queuedAt)[0]
-  if (!next) return
-
-  activeId = next.id
-  run(next).finally(() => {
-    activeId = null
-    setImmediate(kick)
-  })
+    .sort((a, b) => a.queuedAt - b.queuedAt)
+  for (const c of queued) {
+    const conn = connectionOf(c)
+    const lane = laneOf(conn)
+    if (lane.activeId) continue
+    lane.activeId = c.id
+    run(c, lane, conn).finally(() => {
+      lane.activeId = null
+      setImmediate(kick)
+    })
+  }
 }
 
 class StopCampaign extends Error {}
 
-async function run(c) {
+async function run(c, lane, conn) {
   c.status = 'running'
   c.startedAt ??= Date.now()
   c.batchCount = 0
@@ -593,8 +607,8 @@ async function run(c) {
   saveCampaign(c, true)
 
   try {
-    if (c.settings.validateNumbers) await validateNumbers(c)
-    await sendAll(c)
+    if (c.settings.validateNumbers) await validateNumbers(c, conn)
+    await sendAll(c, lane, conn)
     if (shuttingDown) return
     if (c.status === 'running') {
       c.status = 'completed'
@@ -632,7 +646,8 @@ async function wait(c, ms) {
  */
 export async function shutdownRunner() {
   shuttingDown = true
-  if (inFlight) await Promise.race([inFlight.catch(() => {}), sleep(10_000)])
+  const pending = [...lanes.values()].map((l) => l.inFlight).filter(Boolean)
+  if (pending.length) await Promise.race([Promise.allSettled(pending), sleep(10_000)])
   for (const c of listCampaigns()) {
     if (c.status === 'running' || c.status === 'queued') {
       c.resumeAfterRestart = true
@@ -643,7 +658,7 @@ export async function shutdownRunner() {
 
 const randomDelay = ({ minDelay, maxDelay }) => Math.round((minDelay + Math.random() * (maxDelay - minDelay)) * 1000)
 
-async function sendAll(c) {
+async function sendAll(c, lane, conn) {
   let consecutiveFailures = 0
 
   for (const ct of c.contacts) {
@@ -663,8 +678,8 @@ async function sendAll(c) {
     }
 
     // Intervalo aleatório desde o último envio
-    if (lastSendAt) {
-      const ms = Math.max(0, lastSendAt + randomDelay(c.settings) - Date.now())
+    if (lane.lastSendAt) {
+      const ms = Math.max(0, lane.lastSendAt + randomDelay(c.settings) - Date.now())
       c.nextSendAt = Date.now() + ms
       saveCampaign(c)
       if (!(await wait(c, ms))) return
@@ -685,7 +700,7 @@ async function sendAll(c) {
     // O contato pode ter sido cancelado durante a espera (ex.: título pago na régua)
     if (ct.status !== 'pending') continue
     try {
-      inFlight = deliver({
+      lane.inFlight = deliver({
         number: ct.jid || ct.number,
         template: ct.template ?? c.template,
         vars: ct.vars,
@@ -694,8 +709,9 @@ async function sendAll(c) {
         flow: c.flow,
         workflow: c.workflow,
         flowKey: c.flow?.key || c.workflow?.key,
+        conn,
       })
-      const { text, messageId } = await inFlight
+      const { text, messageId } = await lane.inFlight
       Object.assign(ct, { status: 'sent', text, messageId, error: null, processedAt: Date.now() })
       if (c.workflow) onInitialSent(c, ct)
       notifyProcessed(c, ct)
@@ -713,17 +729,17 @@ async function sendAll(c) {
         throw new StopCampaign(`${MAX_CONSECUTIVE_FAILURES} falhas seguidas. Verifique a instância e retome o disparo.`)
       }
     } finally {
-      inFlight = null
+      lane.inFlight = null
     }
 
-    lastSendAt = Date.now()
+    lane.lastSendAt = Date.now()
     c.batchCount++
     saveCampaign(c)
   }
 }
 
 /** Marca como inválidos os números que não têm WhatsApp e guarda o JID dos demais. */
-async function validateNumbers(c) {
+async function validateNumbers(c, conn) {
   const pending = c.contacts.filter((ct) => ct.status === 'pending' && !ct.checked && !ct.number.includes('@'))
   if (!pending.length) return
 
@@ -737,7 +753,10 @@ async function validateNumbers(c) {
 
     let result
     try {
-      result = await checkNumbers(chunk.map((ct) => ct.number))
+      result = await checkNumbers(
+        chunk.map((ct) => ct.number),
+        conn,
+      )
     } catch (err) {
       const fatal = fatalReason(err)
       if (fatal) throw new StopCampaign(fatal)

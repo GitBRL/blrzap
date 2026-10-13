@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { LoaderCircle, Mail, Save, Send } from 'lucide-react'
+import { Eye, EyeOff, LoaderCircle, Mail, Save, Send, Smartphone, Trash2 } from 'lucide-react'
 import { WEEKDAYS } from '@shared/schedule.js'
 import { api } from '../../api.js'
 import { WindowSettings } from '../SendSettings.jsx'
+import { InstanceStrip } from './Envios.jsx'
 
 function Field({ label, hint, children }) {
   return (
@@ -11,6 +12,94 @@ function Field({ label, hint, children }) {
       {children}
       {hint && <small className="muted">{hint}</small>}
     </label>
+  )
+}
+
+/** Instância uazapi própria do financeiro (outro número), separada da das campanhas. */
+function FinanceInstance() {
+  const [info, setInfo] = useState(null)
+  const [baseUrl, setBaseUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api
+      .instanciaFinanceiro()
+      .then((i) => {
+        setInfo(i)
+        setBaseUrl(i.baseUrl)
+      })
+      .catch((err) => setError(err.message))
+  }, [])
+
+  const save = async () => {
+    setBusy('save')
+    setError('')
+    try {
+      const i = await api.saveInstanciaFinanceiro({ baseUrl, token })
+      setInfo(i)
+      setToken('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const remove = async () => {
+    if (!window.confirm('Remover a instância do financeiro? A régua passa a enviar pela instância das campanhas.')) return
+    setBusy('remove')
+    setError('')
+    try {
+      const i = await api.removeInstanciaFinanceiro()
+      setInfo(i)
+      setBaseUrl('')
+      setToken('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (!info) return <p className="muted">{error || 'Carregando…'}</p>
+
+  return (
+    <div className="flow-editor">
+      <InstanceStrip info={info} />
+      <div className="grid-2">
+        <Field label="Server URL">
+          <input type="url" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://seusubdominio.uazapi.com" />
+        </Field>
+        <Field label="Token da instância do financeiro" hint="O token da instância (não o admintoken). Fica salvo só no servidor.">
+          <div className="input-group">
+            <input
+              type={show ? 'text' : 'password'}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder={info.hasToken ? `Atual: ${info.tokenPreview} (deixe vazio para manter)` : 'Cole o token aqui'}
+              autoComplete="off"
+            />
+            <button type="button" className="btn ghost" onClick={() => setShow((v) => !v)} aria-label="Mostrar token">
+              {show ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </Field>
+      </div>
+      <div className="actions">
+        <button className="btn primary" onClick={save} disabled={!!busy || !baseUrl.trim() || (!token.trim() && !info.hasToken)}>
+          {busy === 'save' ? <LoaderCircle size={16} className="spin" /> : <Save size={16} />} Salvar e testar
+        </button>
+        {info.configured && (
+          <button className="btn danger-ghost" onClick={remove} disabled={!!busy}>
+            {busy === 'remove' ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />} Remover instância própria
+          </button>
+        )}
+      </div>
+      {error && <div className="callout bad">{error}</div>}
+    </div>
   )
 }
 
@@ -160,7 +249,7 @@ export default function ConfigRegua({ config, setConfig }) {
           </Field>
         </div>
         <WindowSettings window={config.sending.window} setWindow={(window) => setSending({ window })} />
-        <p className="muted small">Os envios do dia aparecem como a campanha “Régua de cobrança — dd/mm” na aba Campanhas, com pausa e relatório.</p>
+        <p className="muted small">Acompanhe, pause e reenvie as falhas na aba Envios.</p>
 
         <h3 className="subhead">Promessas de pagamento</h3>
         <label className="check">
@@ -180,6 +269,17 @@ export default function ConfigRegua({ config, setConfig }) {
         {config.promise.brokenEnabled && (
           <textarea rows={3} value={config.promise.brokenTemplate} onChange={(e) => setPromise({ brokenTemplate: e.target.value })} />
         )}
+      </section>
+
+      <section className="card">
+        <h3 className="card-title">
+          <Smartphone size={16} /> WhatsApp do financeiro
+        </h3>
+        <p className="muted small">
+          Conecte uma instância uazapi própria (outro número) para a cobrança. Ela envia em paralelo, com fila e ritmo próprios, sem interferir
+          nas campanhas. Sem ela, a régua usa a instância das campanhas e divide a fila com elas.
+        </p>
+        <FinanceInstance />
       </section>
 
       <section className="card">

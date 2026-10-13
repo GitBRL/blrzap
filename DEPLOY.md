@@ -12,7 +12,7 @@ Este guia coloca o painel de disparos no ar no [Railway](https://railway.com). O
 | Domínio público | gerado em Networking | a uazapi baixa as mídias por ele (obrigatório para arquivos acima de 45 MB) |
 | **`ADMIN_PASSWORD`** | senha forte | senha do usuário `admin` na tela de login; sem ela o painel fica aberto |
 | Healthcheck | `/api/health` | o Railway só libera o tráfego quando o app responde |
-| Réplicas | **1** | o envio e o recebimento de respostas rodam em memória; 2 réplicas enviariam em dobro |
+| Réplicas | **1** | o envio e o recebimento de respostas rodam em memória; 2 réplicas enviariam em dobro (campanhas e financeiro já enviam em paralelo dentro da mesma réplica) |
 | Serverless | **desligado** | dormindo, o app não dispara agendamentos, não roda a régua de cobrança nem recebe cliques nos botões |
 
 ---
@@ -66,6 +66,7 @@ Na aba **Variables** do serviço:
 | `ADMIN_PASSWORD` | **sim** | senha longa e aleatória do usuário administrador (tela de login). |
 | `ADMIN_USER` | não | nome do usuário no login. Padrão: `admin`. |
 | `SESSION_SECRET` | não | segredo das sessões. Se vazio, é gerado e salvo no volume (`/data/session.key`). |
+| `UAZAPI_FIN_URL`, `UAZAPI_FIN_TOKEN` | não | instância uazapi própria do financeiro (régua de cobrança). Também pode ser configurada na tela (Cobrança → Configurações). |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | não | SMTP dos e-mails da régua de cobrança. Também pode ser configurado na tela (Cobrança → Configurações). |
 | `PUBLIC_URL` | não | endereço público do painel, se usar domínio próprio. Sem ela, o app usa o domínio gerado pelo Railway (`RAILWAY_PUBLIC_DOMAIN`). |
 | `UAZAPI_URL` | não | `https://seusubdominio.uazapi.com`. Também pode ser configurada pela tela. |
