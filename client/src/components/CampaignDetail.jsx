@@ -15,6 +15,7 @@ import {
 import { ProgressBar, StatusBadge } from './StatusBadge.jsx'
 import ContactsTable from './ContactsTable.jsx'
 import FlowResults from './FlowResults.jsx'
+import WorkflowResults from './WorkflowResults.jsx'
 
 function Stat({ label, value, tone }) {
   return (
@@ -47,8 +48,10 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
   const scheduled = c?.status === 'scheduled'
   const [rescheduleInput, setRescheduleInput] = useState(null) // string do datetime-local enquanto edita
   const hasFlow = Boolean(c?.flow)
+  const hasWorkflow = Boolean(c?.workflow)
+  const hasAnswers = hasFlow || hasWorkflow
   const now = useNow((live || scheduled) && active)
-  const currentTab = tab || (hasFlow ? 'responses' : 'log')
+  const currentTab = tab || (hasAnswers ? 'responses' : 'log')
 
   const refresh = useCallback(async () => {
     try {
@@ -64,10 +67,10 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
   useEffect(() => {
     if (!active) return
     refresh()
-    if (!live && !hasFlow && !scheduled) return
+    if (!live && !hasAnswers && !scheduled) return
     const t = setInterval(refresh, live ? 2000 : 5000)
     return () => clearInterval(t)
-  }, [active, live, hasFlow, scheduled, refresh])
+  }, [active, live, hasAnswers, scheduled, refresh])
 
   const showContacts = (filter) => {
     setContactFilter(filter)
@@ -240,6 +243,12 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
             {c.flowCounts.qualified > 0 && <span className="tab-count">{formatNumber(c.flowCounts.qualified)}</span>}
           </button>
         )}
+        {hasWorkflow && (
+          <button className={currentTab === 'responses' ? 'active' : ''} onClick={() => setTab('responses')}>
+            Respostas
+            {c.workflowCounts.replied > 0 && <span className="tab-count">{formatNumber(c.workflowCounts.replied)}</span>}
+          </button>
+        )}
         <button className={currentTab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>
           Atividade
         </button>
@@ -253,6 +262,9 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
 
       {currentTab === 'responses' && hasFlow && (
         <FlowResults campaign={c} onShow={showContacts} onRetryWebhooks={() => act('retry-webhooks')} />
+      )}
+      {currentTab === 'responses' && hasWorkflow && (
+        <WorkflowResults campaign={c} onShow={showContacts} onRetryWebhooks={() => act('retry-webhooks')} />
       )}
 
       {currentTab === 'log' && (
@@ -271,6 +283,7 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
           id={id}
           version={version}
           hasFlow={hasFlow}
+          workflow={c.workflow}
           dataFields={c.flow?.dataStep?.fields || []}
           hasWebhook={Boolean(c.flow?.webhook)}
           filter={contactFilter}
@@ -291,6 +304,21 @@ export default function CampaignDetail({ id, active, onChanged, onDeleted }) {
             </p>
           )}
           <pre className="template-view">{c.template || '(sem texto)'}</pre>
+          {hasWorkflow && (
+            <div className="flow-summary">
+              <p>
+                <strong>Workflow:</strong> {c.workflow.name} ({c.workflow.nodes.length} blocos — cópia de quando a campanha foi criada)
+              </p>
+              {(() => {
+                const start = c.workflow.nodes.find((n) => n.type === 'start')
+                return start?.data.choices.length ? (
+                  <p>
+                    <strong>Opções da mensagem:</strong> {start.data.choices.map((o) => `“${o.label}”`).join(' · ')}
+                  </p>
+                ) : null
+              })()}
+            </div>
+          )}
           {hasFlow && (
             <div className="flow-summary">
               <p>

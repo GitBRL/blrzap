@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import { api } from '../api.js'
 import { formatDateTime, formatNumber } from '../utils.js'
 import { CONTACT_STATUS, StatusBadge } from './StatusBadge.jsx'
+import { isWaiting, NODE_TYPES } from '@shared/workflow.js'
 
 const PAGE_SIZE = 50
 
@@ -48,14 +49,57 @@ function FlowCell({ flow, fields }) {
   )
 }
 
-/** `filter` usa o formato "status:sent" ou "flow:qualified". */
-export default function ContactsTable({ id, version, hasFlow, hasWebhook = false, dataFields = [], filter, setFilter }) {
+/** Onde o contato está no workflow: o bloco em que espera, ou "concluiu"; etiquetas e última resposta. */
+function WorkflowCell({ wf, workflow }) {
+  if (!wf) return <span className="muted">—</span>
+  const node = wf.node ? workflow.nodes.find((n) => n.id === wf.node) : null
+  const failed = Object.values(wf.webhooks || {}).some((w) => w.status === 'failed')
+  return (
+    <div className="flow-cell">
+      <span>{node ? `Aguardando: ${node.data.title || NODE_TYPES[node.type]?.label}` : wf.done ? 'Concluiu' : '—'}</span>
+      {wf.tags.map((t) => (
+        <span key={t} className="badge tone-ok">
+          {t}
+        </span>
+      ))}
+      {failed && <span className="badge tone-bad">Webhook falhou</span>}
+      {wf.lastReply && (
+        <span className="muted small" title={wf.lastReply}>
+          “{wf.lastReply.length > 40 ? `${wf.lastReply.slice(0, 39)}…` : wf.lastReply}”
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Filtros do workflow: situação, etiquetas e cada bloco que espera resposta. */
+function workflowFilterOptions(workflow) {
+  const out = [
+    ['active', 'Aguardando resposta'],
+    ['replied', 'Responderam'],
+    ['no_reply', 'Sem resposta'],
+    ['done', 'Chegaram ao fim'],
+  ]
+  if (workflow.nodes.some((n) => n.type === 'webhook')) out.push(['webhook_failed', 'Falha no webhook'])
+  for (const tag of new Set(workflow.nodes.flatMap((n) => (n.data.choices || []).map((c) => c.tag).filter(Boolean)))) {
+    out.push([`tag:${tag}`, `Etiqueta: ${tag}`])
+  }
+  for (const n of workflow.nodes) {
+    if (isWaiting(n)) out.push([`waiting:${n.id}`, `Parados em: ${n.data.title || NODE_TYPES[n.type]?.label}`])
+  }
+  return out
+}
+
+/** `filter` usa o formato "status:sent", "flow:qualified" ou "flow:waiting:n3" (só o primeiro ":" separa). */
+export default function ContactsTable({ id, version, hasFlow, workflow = null, hasWebhook = false, dataFields = [], filter, setFilter }) {
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [data, setData] = useState(null)
 
-  const [kind, value] = filter ? filter.split(':') : ['', '']
+  const cut = filter ? filter.indexOf(':') : -1
+  const [kind, value] = cut > 0 ? [filter.slice(0, cut), filter.slice(cut + 1)] : ['', '']
+  const hasAnswers = hasFlow || Boolean(workflow)
 
   // Debounce da busca
   useEffect(() => {
@@ -83,7 +127,7 @@ export default function ContactsTable({ id, version, hasFlow, hasWebhook = false
   }, [id, kind, value, search, page, version])
 
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1
-  const cols = hasFlow ? 6 : 5
+  const cols = hasAnswers ? 6 : 5
 
   return (
     <>
@@ -101,6 +145,18 @@ export default function ContactsTable({ id, version, hasFlow, hasWebhook = false
               </option>
             ))}
           </optgroup>
+          {workflow && (
+            <optgroup label="Workflow">
+              {workflowFilterOptions(workflow).map(([v, label]) => (
+                <option key={v} value={`flow:${v}`}>
+                  {label}
+                </option>
+              ))}
+              {filter.startsWith('flow:') && !workflowFilterOptions(workflow).some(([v]) => `flow:${v}` === filter) && (
+                <option value={filter}>Filtro dos resultados</option>
+              )}
+            </optgroup>
+          )}
           {hasFlow && (
             <optgroup label="Respostas">
               {Object.entries(FLOW_FILTERS)
@@ -123,7 +179,7 @@ export default function ContactsTable({ id, version, hasFlow, hasWebhook = false
               <th>Linha</th>
               <th>Número</th>
               <th>Envio</th>
-              {hasFlow && <th>Resposta</th>}
+              {hasAnswers && <th>Resposta</th>}
               <th>Mensagem / erro</th>
               <th>Horário</th>
             </tr>
@@ -139,6 +195,11 @@ export default function ContactsTable({ id, version, hasFlow, hasWebhook = false
                 {hasFlow && (
                   <td className="nowrap">
                     <FlowCell flow={ct.flow} fields={dataFields} />
+                  </td>
+                )}
+                {workflow && (
+                  <td>
+                    <WorkflowCell wf={ct.wf} workflow={workflow} />
                   </td>
                 )}
                 <td className="cell-message" title={ct.error || ct.text || ''}>

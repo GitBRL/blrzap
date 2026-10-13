@@ -2132,3 +2132,519 @@ textarea {
     grid-row: 1;
   }
 }
+
+/* ---------- Workflows ---------- */
+
+.callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.check.small span {
+  font-size: 13px;
+}
+
+.inline-icon {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.sheet-pick {
+  max-width: 220px;
+}
+
+.wf-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-pick select {
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-preview-next {
+  align-self: stretch;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.wf-preview-next ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-preview-next li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Lista de templates */
+
+.workflows {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workflows-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workflows-head h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.workflows-head p {
+  margin: 0;
+  max-width: 720px;
+}
+
+.wf-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.wf-card {
+  gap: 8px;
+}
+
+.wf-card p {
+  margin: 0;
+}
+
+.wf-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wf-card-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.wf-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.wf-card-actions .icon-btn {
+  margin-left: auto;
+}
+
+/* Editor */
+
+.wf-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 112px);
+  min-height: 520px;
+}
+
+.wf-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.wf-name {
+  flex: 1;
+  min-width: 200px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.wf-status {
+  white-space: nowrap;
+}
+
+.wf-problems-toggle {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.wf-problems {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.wf-problems li.warn {
+  color: var(--warn);
+}
+
+.wf-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 390px;
+  gap: 10px;
+}
+
+.wf-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-palette-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--wf-accent, var(--primary));
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: grab;
+}
+
+.wf-palette-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.wf-canvas {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.wf-canvas .react-flow {
+  --xy-background-color: var(--surface-2);
+  --xy-edge-stroke: var(--border-strong);
+  --xy-edge-stroke-selected: var(--primary);
+  --xy-minimap-background-color: var(--surface);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-border-color: var(--border);
+}
+
+.wf-inspector {
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.wf-inspector-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.wf-inspector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wf-inspector-body > p {
+  margin: 0;
+}
+
+.wf-tips {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.wf-tips ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wf-choice .wf-tag-input {
+  flex: 0 0 92px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.wf-choice input:not(.wf-tag-input) {
+  min-width: 0;
+}
+
+.wf-media .input-group select {
+  flex: 0 0 128px;
+}
+
+.wf-media .input-group input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wf-timeout .input-group input {
+  width: 90px;
+  flex: 0 0 auto;
+}
+
+.wf-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wf-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.wf-test {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Blocos no canvas — cada tipo com a sua cor */
+
+.t-start { --wf-accent: var(--primary); }
+.t-message { --wf-accent: var(--info); }
+.t-question { --wf-accent: #7c4dbd; }
+.t-data { --wf-accent: var(--ok); }
+.t-condition { --wf-accent: var(--warn); }
+.t-webhook { --wf-accent: #b8478a; }
+
+.wf-node {
+  width: 260px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-top: 4px solid var(--wf-accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+}
+
+.wf-node.selected {
+  box-shadow: 0 0 0 2px var(--wf-accent);
+}
+
+.wf-node.has-problem {
+  border-color: var(--warn);
+  border-top-color: var(--wf-accent);
+}
+
+.wf-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  color: var(--wf-accent);
+}
+
+.wf-node-type {
+  font-weight: 600;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.wf-node-title {
+  color: var(--text);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-node-body {
+  padding: 0 10px 8px;
+}
+
+.wf-node-body p {
+  margin: 0 0 2px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.wf-node-body code {
+  font-size: 11.5px;
+}
+
+.wf-node-outs {
+  border-top: 1px solid var(--border);
+}
+
+.wf-out {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 5px 16px 5px 10px;
+  font-size: 12px;
+  text-align: right;
+}
+
+.wf-out + .wf-out {
+  border-top: 1px dashed var(--border);
+}
+
+.wf-out.timeout,
+.wf-out.no {
+  color: var(--muted);
+}
+
+.wf-tag {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.wf-node .react-flow__handle {
+  width: 11px;
+  height: 11px;
+  background: var(--surface);
+  border: 2px solid var(--wf-accent);
+}
+
+.wf-node .wf-in {
+  top: 22px;
+}
+
+.wf-node .react-flow__handle.connectingto,
+.wf-node .react-flow__handle:hover {
+  background: var(--wf-accent);
+}
+
+/* Resultados da campanha com workflow */
+
+.wf-tag-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.wf-tag-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.wf-tag-result .link {
+  flex: 1;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.wf-node-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wf-node-result {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wf-node-result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wf-node-result-nums {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wf-node-result-nums .link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.range-row {
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.range-row:hover .range-label {
+  color: var(--primary);
+}
+
+@media (max-width: 1100px) {
+  .wf-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(420px, 1fr) auto;
+  }
+
+  .wf-palette {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .wf-editor {
+    height: auto;
+  }
+
+  .workflows-head {
+    flex-direction: column;
+  }
+}

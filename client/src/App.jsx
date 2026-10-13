@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LogOut, Megaphone, Settings } from 'lucide-react'
+import { History, LogOut, Megaphone, Settings, Workflow } from 'lucide-react'
 import { api } from './api.js'
 import InstanceStatus from './components/InstanceStatus.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import NewCampaign from './components/NewCampaign.jsx'
 import Campaigns from './components/Campaigns.jsx'
 import Login from './components/Login.jsx'
+import WorkflowsPage from './components/workflow/WorkflowsPage.jsx'
 
 export default function App() {
   const [auth, setAuth] = useState(null) // { authEnabled, authenticated, user, expired? }
@@ -49,7 +50,13 @@ function Dashboard({ user, onLogout }) {
   const [selectedId, setSelectedId] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [instance, setInstance] = useState(null)
+  // Sobe a cada workflow salvo, para a nova campanha reler a lista
+  const [workflowsVersion, setWorkflowsVersion] = useState(0)
+  // Workflow a abrir no canvas ('new' cria um), pedido pela tela de nova campanha
+  const [workflowToOpen, setWorkflowToOpen] = useState(undefined)
   const promptedSetup = useRef(false)
+  const bumpWorkflows = useCallback(() => setWorkflowsVersion((v) => v + 1), [])
+  const clearWorkflowToOpen = useCallback(() => setWorkflowToOpen(undefined), [])
 
   const refreshInstance = useCallback(async () => {
     try {
@@ -78,6 +85,11 @@ function Dashboard({ user, onLogout }) {
     setTab('history')
   }
 
+  const editWorkflow = (id) => {
+    setWorkflowToOpen(id || 'new')
+    setTab('workflows')
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -99,6 +111,14 @@ function Dashboard({ user, onLogout }) {
             onClick={() => setTab('history')}
           >
             <History size={16} /> Campanhas
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'workflows'}
+            className={tab === 'workflows' ? 'active' : ''}
+            onClick={() => setTab('workflows')}
+          >
+            <Workflow size={16} /> Workflows
           </button>
         </nav>
 
@@ -123,10 +143,13 @@ function Dashboard({ user, onLogout }) {
       <main className="content">
         {/* As duas telas ficam montadas para não perder o CSV/template ao trocar de aba */}
         <div hidden={tab !== 'new'}>
-          <NewCampaign instance={instance} onCreated={openCampaign} />
+          <NewCampaign instance={instance} onCreated={openCampaign} workflowsVersion={workflowsVersion} onEditWorkflow={editWorkflow} />
         </div>
         <div hidden={tab !== 'history'}>
           <Campaigns active={tab === 'history'} selectedId={selectedId} onSelect={setSelectedId} onNew={() => setTab('new')} />
+        </div>
+        <div hidden={tab !== 'workflows'}>
+          <WorkflowsPage openId={workflowToOpen} onOpened={clearWorkflowToOpen} onChanged={bumpWorkflows} />
         </div>
       </main>
 

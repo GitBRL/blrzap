@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarClock, LoaderCircle, Rocket, Send, TriangleAlert } from 'lucide-react'
+import { CalendarClock, LoaderCircle, PencilRuler, Rocket, Send, TriangleAlert, Workflow } from 'lucide-react'
 import { applyFilters } from '@shared/filters.js'
 import { detectPhoneColumn, prepareContacts } from '@shared/phone.js'
 import { DEFAULT_WINDOW } from '@shared/schedule.js'
-import { autoMapFields, DEFAULT_DATA_STEP, DEFAULT_WEBHOOK } from '@shared/datafields.js'
+import { startNode, usesList, workflowProblems } from '@shared/workflow.js'
 import { api } from '../api.js'
 import { browserTimeZone, formatWhen, nextFullHour, storageGet, storageSet, toLocalInput } from '../utils.js'
 import CsvImport from './CsvImport.jsx'
@@ -11,7 +11,6 @@ import TemplateEditor from './TemplateEditor.jsx'
 import MediaPicker, { EMPTY_MEDIA, mediaProblem } from './MediaPicker.jsx'
 import SendSettings from './SendSettings.jsx'
 import MessagePreview from './MessagePreview.jsx'
-import FlowEditor, { DEFAULT_FLOW, flowProblems } from './FlowEditor.jsx'
 import { ListenerStatus, useResponses } from './FlowResults.jsx'
 
 const EMPTY_FILTERS = { match: 'all', rules: [] }
@@ -40,7 +39,7 @@ function Section({ step, title, children, aside }) {
   )
 }
 
-export default function NewCampaign({ instance, onCreated }) {
+export default function NewCampaign({ instance, onCreated, workflowsVersion, onEditWorkflow }) {
   const [csv, setCsv] = useState(null)
   const [phoneColumn, setPhoneColumn] = useState('')
   const [countryCode, setCountryCode] = useState(() => storageGet('disparos.countryCode', '55'))
@@ -53,36 +52,57 @@ export default function NewCampaign({ instance, onCreated }) {
   const [scheduleInput, setScheduleInput] = useState(() => toLocalInput(nextFullHour()))
   const [media, setMedia] = useState(EMPTY_MEDIA)
   const [filters, setFilters] = useState(EMPTY_FILTERS)
-  const [flow, setFlow] = useState(() => {
-    const saved = storageGet('disparos.flow.v2', {})
-    return {
-      ...DEFAULT_FLOW,
-      ...saved,
-      buttons: { ...DEFAULT_FLOW.buttons, ...saved.buttons },
-      replies: { ...DEFAULT_FLOW.replies, ...saved.replies },
-      dataStep: { ...DEFAULT_DATA_STEP, ...saved.dataStep },
-      webhook: { ...DEFAULT_WEBHOOK, ...saved.webhook },
-    }
-  })
+  // 'simple' = só a mensagem; 'workflow' = a mensagem com os botões e o caminho de um workflow
+  const [mode, setMode] = useState(() => storageGet('disparos.mode', 'simple'))
+  const [workflowId, setWorkflowId] = useState(() => storageGet('disparos.workflowId', ''))
+  const [workflows, setWorkflows] = useState([])
+  const [workflow, setWorkflow] = useState(null)
   const [name, setName] = useState('')
   const [previewIndex, setPreviewIndex] = useState(0)
   const [seed, setSeed] = useState(1)
   const [testNumber, setTestNumber] = useState(() => storageGet('disparos.testNumber', ''))
   const [busy, setBusy] = useState('') // 'test' | 'start'
   const [feedback, setFeedback] = useState(null) // { tone, text, source: 'test' | 'start' }
-  const responses = useResponses(flow.enabled)
+  const useWorkflow = mode === 'workflow'
+  const responses = useResponses(useWorkflow)
+  const startChoices = useWorkflow ? startNode(workflow)?.data.choices || [] : []
+  const withButtons = startChoices.length > 0
 
   // Guarda rascunho do template e preferências no navegador
   useEffect(() => storageSet('disparos.template', template), [template])
   useEffect(() => storageSet('disparos.settings', settings), [settings])
   useEffect(() => storageSet('disparos.countryCode', countryCode), [countryCode])
   useEffect(() => storageSet('disparos.testNumber', testNumber), [testNumber])
-  useEffect(() => storageSet('disparos.flow.v2', flow), [flow])
+  useEffect(() => storageSet('disparos.mode', mode), [mode])
+  useEffect(() => storageSet('disparos.workflowId', workflowId), [workflowId])
+
+  // A lista volta a ser lida quando um workflow é salvo na aba Workflows
+  useEffect(() => {
+    api
+      .workflows()
+      .then((list) => {
+        setWorkflows(list)
+        setWorkflowId((id) => (list.some((w) => w.id === id) ? id : list[0]?.id || ''))
+      })
+      .catch(() => setWorkflows([]))
+  }, [workflowsVersion])
+
+  useEffect(() => {
+    if (!workflowId) return setWorkflow(null)
+    let alive = true
+    api
+      .workflow(workflowId)
+      .then((wf) => alive && setWorkflow(wf))
+      .catch(() => alive && setWorkflow(null))
+    return () => {
+      alive = false
+    }
+  }, [workflowId, workflowsVersion])
 
   // Botões aceitam imagem, vídeo ou documento no cabeçalho — não áudio
   useEffect(() => {
-    if (flow.enabled && (media.type === 'audio' || media.type === 'ptt')) setMedia((m) => ({ ...m, type: 'image' }))
-  }, [flow.enabled, media.type])
+    if (withButtons && (media.type === 'audio' || media.type === 'ptt')) setMedia((m) => ({ ...m, type: 'image' }))
+  }, [withButtons, media.type])
 
   const filtered = useMemo(() => (csv ? applyFilters(csv.rows, filters) : { rows: [], indexes: [] }), [csv, filters])
   const prepared = useMemo(
@@ -99,8 +119,6 @@ export default function NewCampaign({ instance, onCreated }) {
     setCsv(data)
     setFilters(EMPTY_FILTERS)
     setPhoneColumn(detectPhoneColumn(data.headers, data.rows))
-    // Liga cada campo da confirmação de dados à coluna correspondente do novo CSV
-    setFlow((f) => ({ ...f, dataStep: { ...f.dataStep, fields: autoMapFields(f.dataStep.fields, data.headers) } }))
     setPreviewIndex(0)
     setFeedback(null)
     if (!name) setName(data.fileName.replace(/\.[^.]+$/, ''))
@@ -130,14 +148,15 @@ export default function NewCampaign({ instance, onCreated }) {
     return { type: media.type, uploadId: media.uploadId, fileName: media.file.name, mimetype: media.file.type }
   }
 
-  const flowPayload = flow.enabled ? flow : null
+  const wfProblems = useWorkflow && workflow ? workflowProblems(workflow) : []
 
   const problems = []
   if (!csv) problems.push('Importe o CSV com os contatos.')
   else if (!filtered.rows.length) problems.push('Nenhuma linha atende aos filtros.')
   else if (!validContacts.length) problems.push('Nenhum telefone válido na coluna selecionada.')
-  if (!template.trim() && (media.mode === 'none' || flow.enabled)) problems.push('Escreva a mensagem.')
-  problems.push(...flowProblems(flow))
+  if (!template.trim() && (media.mode === 'none' || withButtons)) problems.push('Escreva a mensagem.')
+  if (useWorkflow && !workflowId) problems.push('Escolha o workflow (ou crie um na aba Workflows).')
+  if (wfProblems.length) problems.push(`O workflow “${workflow.name}” tem problemas. Abra no editor para corrigir.`)
   if (when === 'schedule' && (!startAt || Number.isNaN(startAt))) problems.push('Escolha a data e hora do agendamento.')
   else if (startAt && startAt < Date.now()) problems.push('A data do agendamento já passou.')
   const w = settings.window
@@ -159,10 +178,10 @@ export default function NewCampaign({ instance, onCreated }) {
         vars: validContacts[safeIndex]?.vars || {},
         media: await mediaPayload(),
         settings: cleanSettings(),
-        flow: flowPayload,
+        workflowId: useWorkflow ? workflowId : undefined,
       })
       const text = res.flow
-        ? `Teste enviado para +${res.number}. Toque nos botões no seu WhatsApp para testar o fluxo completo.`
+        ? `Teste enviado para +${res.number}. Responda no seu WhatsApp para percorrer o workflow.`
         : `Mensagem de teste enviada para +${res.number}.`
       setFeedback({ tone: 'ok', text, source: 'test' })
     } catch (err) {
@@ -190,7 +209,7 @@ export default function NewCampaign({ instance, onCreated }) {
         phoneColumn,
         countryCode,
         filters,
-        flow: flowPayload,
+        workflowId: useWorkflow ? workflowId : undefined,
         startAt,
       })
       setCsv(null)
@@ -228,44 +247,63 @@ export default function NewCampaign({ instance, onCreated }) {
         <Section step="2" title="Mensagem">
           <div className="segmented" role="radiogroup" aria-label="Formato da mensagem">
             {[
-              [false, 'Mensagem simples'],
-              [true, 'Com botões de interesse'],
-            ].map(([enabled, label]) => (
+              ['simple', 'Mensagem simples'],
+              ['workflow', 'Com workflow'],
+            ].map(([value, label]) => (
               <button
-                key={label}
+                key={value}
                 type="button"
                 role="radio"
-                aria-checked={flow.enabled === enabled}
-                className={flow.enabled === enabled ? 'active' : ''}
-                onClick={() => setFlow({ ...flow, enabled })}
+                aria-checked={mode === value}
+                className={mode === value ? 'active' : ''}
+                onClick={() => setMode(value)}
               >
                 {label}
               </button>
             ))}
           </div>
-          {flow.enabled && (
-            <p className="muted small">
-              A mensagem vai com os botões “{flow.buttons.yes}” e “{flow.buttons.no}”. Quem tiver interesse recebe a pergunta de
-              faturamento, e o painel separa os leads qualificados.
-            </p>
+          {useWorkflow && (
+            <div className="wf-pick">
+              <label className="field">
+                <span>Workflow</span>
+                <div className="input-group">
+                  <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>
+                    {!workflows.length && <option value="">Nenhum workflow criado</option>}
+                    {workflows.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                        {w.problems.length ? ' (com problemas)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn" onClick={() => onEditWorkflow(workflowId || null)}>
+                    {workflowId ? <PencilRuler size={16} /> : <Workflow size={16} />} {workflowId ? 'Editar' : 'Criar'}
+                  </button>
+                </div>
+              </label>
+              {workflow && (
+                <p className="muted small">
+                  {withButtons
+                    ? `A mensagem vai com ${usesList(startNode(workflow)) ? 'uma lista de' : 'os botões'} ${startChoices.map((c) => `“${c.label}”`).join(', ')}. `
+                    : 'A mensagem vai sem botões e o workflow segue logo depois dela. '}
+                  As respostas seguem o caminho montado no canvas ({workflow.blocks} blocos).
+                </p>
+              )}
+              {wfProblems.length > 0 && (
+                <ul className="problems">
+                  {wfProblems.slice(0, 5).map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           <TemplateEditor template={template} setTemplate={setTemplate} headers={csv?.headers || []} />
-          <h3 className="subhead">{flow.enabled ? 'Imagem no topo da mensagem' : 'Anexo'}</h3>
-          <MediaPicker media={media} setMedia={setMedia} allowAudio={!flow.enabled} server={instance?.server} />
+          <h3 className="subhead">{withButtons ? 'Imagem no topo da mensagem' : 'Anexo'}</h3>
+          <MediaPicker media={media} setMedia={setMedia} allowAudio={!withButtons} server={instance?.server} />
         </Section>
 
-        {flow.enabled && (
-          <Section step="3" title="Botões e qualificação">
-            <FlowEditor
-              flow={flow}
-              setFlow={setFlow}
-              headers={csv?.headers || []}
-              sample={{ vars: validContacts[safeIndex]?.vars || {}, number: validContacts[safeIndex]?.number || '' }}
-            />
-          </Section>
-        )}
-
-        <Section step={flow.enabled ? '4' : '3'} title="Ritmo de envio">
+        <Section step="3" title="Ritmo de envio">
           <SendSettings settings={settings} setSettings={setSettings} count={validContacts.length} startAt={startAt} />
         </Section>
       </div>
@@ -274,9 +312,11 @@ export default function NewCampaign({ instance, onCreated }) {
         <MessagePreview
           template={template}
           media={media}
-          flow={flowPayload}
+          workflow={useWorkflow ? workflow : null}
           separateMedia={Boolean(
-            flowPayload && ['video', 'document'].includes(media.type) && instance?.server?.version && !instance.server.buttonMedia,
+            withButtons &&
+              (usesList(startNode(workflow)) ||
+                (['video', 'document'].includes(media.type) && instance?.server?.version && !instance.server.buttonMedia)),
           )}
           contacts={validContacts}
           index={safeIndex}
@@ -289,9 +329,9 @@ export default function NewCampaign({ instance, onCreated }) {
           <h3 className="card-title">Enviar teste</h3>
           <p className="muted small">
             Envia a mensagem do contato exibido na prévia para o seu número
-            {flow.enabled ? '. Toque nos botões para testar o fluxo completo.' : '.'}
+            {useWorkflow ? '. Responda no seu WhatsApp para percorrer o workflow inteiro.' : '.'}
           </p>
-          {flow.enabled && <ListenerStatus status={responses} />}
+          {useWorkflow && <ListenerStatus status={responses} />}
           <div className="input-group">
             <input
               placeholder="Ex.: 11 98765-4321"

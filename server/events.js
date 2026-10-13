@@ -4,6 +4,7 @@
 import crypto from 'node:crypto'
 import { getConfig } from './config.js'
 import { handleIncoming } from './flow.js'
+import { handleWorkflowIncoming } from './workflow.js'
 
 const state = {
   sse: { connected: false, connectedAt: null, lastEventAt: null, lastError: null, received: 0 },
@@ -27,7 +28,8 @@ function dispatch(data, source) {
   state[source].lastEventAt = Date.now()
   state[source].received++
   try {
-    handleIncoming(evt)
+    // Workflow primeiro; o que não for dele vai para o fluxo antigo (campanhas anteriores)
+    if (!handleWorkflowIncoming(evt)) handleIncoming(evt)
   } catch (err) {
     console.error('Erro ao processar evento da uazapi:', err)
   }
