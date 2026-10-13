@@ -4,7 +4,24 @@ import path from 'node:path'
 import express from 'express'
 import Papa from 'papaparse'
 import { normalizePhone } from '../shared/phone.js'
-import { publicConfig, setConfig } from './config.js'
+import { publicConfig, publicSmtp, setConfig, setSmtp } from './config.js'
+import { sendMail, verifySmtp } from './mailer.js'
+import {
+  dunningStats,
+  exportRows,
+  flushDunning,
+  getDunningConfig,
+  importTitles,
+  listTasks,
+  listTitles,
+  resolveTask,
+  retryFailedEmails,
+  runDunning,
+  saveDunningConfig,
+  startDunning,
+  titleAction,
+  titleDetail,
+} from './dunning.js'
 import {
   cleanupUploads,
   completeUpload,
@@ -556,6 +573,61 @@ api.delete('/campaigns/:id', (req, res) => {
   res.status(204).end()
 })
 
+// ---- SMTP (e-mails da régua) ---------------------------------------------------------------
+
+api.get('/smtp', (req, res) => res.json(publicSmtp()))
+
+api.put('/smtp', (req, res) => {
+  try {
+    setSmtp(req.body || {})
+  } catch (err) {
+    throw new ValidationError(err.message)
+  }
+  res.json(publicSmtp())
+})
+
+api.post('/smtp/test', async (req, res) => {
+  const to = String(req.body?.to || '').trim()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new ValidationError('Informe um e-mail válido para o teste.')
+  try {
+    await verifySmtp()
+    await sendMail({ to, subject: 'Teste da régua de cobrança', text: 'Se você recebeu este e-mail, o SMTP do painel de disparos está funcionando. ✅' })
+  } catch (err) {
+    throw new ValidationError(`Falha no SMTP: ${err.message}`)
+  }
+  res.json({ ok: true })
+})
+
+// ---- Régua de cobrança ----------------------------------------------------------------------
+
+api.get('/regua', (req, res) => res.json({ config: getDunningConfig(), stats: dunningStats(), smtp: publicSmtp() }))
+
+api.put('/regua/config', (req, res) => res.json(saveDunningConfig(req.body || {})))
+
+api.post('/regua/executar', (req, res) => res.json(runDunning({ manual: true })))
+
+api.post('/regua/reenviar-emails', (req, res) => res.json({ count: retryFailedEmails() }))
+
+api.get('/regua/titulos', (req, res) => res.json(listTitles(req.query)))
+
+api.post('/regua/titulos/importar', (req, res) => res.json(importTitles(req.body || {})))
+
+api.get('/regua/titulos/:id', (req, res) => res.json(titleDetail(req.params.id)))
+
+api.post('/regua/titulos/:id/:action', (req, res) => res.json(titleAction(req.params.id, req.params.action, req.body || {})))
+
+api.get('/regua/tarefas', (req, res) => res.json(listTasks({ status: String(req.query.status || 'open') })))
+
+api.post('/regua/tarefas/:id', (req, res) => res.json(resolveTask(req.params.id, req.body || {})))
+
+api.get('/regua/exportar', (req, res) => {
+  const rows = exportRows()
+  const csv = Papa.unparse(rows.length ? rows : [{ nome: '' }], { delimiter: ';' })
+  res.set('Content-Type', 'text/csv; charset=utf-8')
+  res.set('Content-Disposition', `attachment; filename="regua-de-cobranca-${new Date().toISOString().slice(0, 10)}.csv"`)
+  res.send('\uFEFF' + csv)
+})
+
 api.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }))
 
 app.use('/api', api)
@@ -594,6 +666,7 @@ app.listen(PORT, () => {
   startScheduler()
   startListener()
   resumePendingWebhooks()
+  startDunning()
   resumeWorkflowWebhooks()
   startWorkflowTimers()
   scheduleUploadCleanup()
@@ -635,6 +708,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     console.log(`${signal} recebido: finalizando o envio em andamento e salvando…`)
     await shutdownRunner()
     flushAll()
+    flushDunning()
     process.exit(0)
   })
 }

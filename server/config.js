@@ -41,3 +41,43 @@ export function publicConfig() {
     tokenPreview: token ? `${token.slice(0, 4)}…${token.slice(-4)}` : '',
   }
 }
+
+// ---- SMTP (e-mails da régua de cobrança) -------------------------------------------------
+
+export function getSmtp() {
+  const s = saved.smtp || {}
+  return {
+    host: s.host || process.env.SMTP_HOST || '',
+    port: Number(s.port || process.env.SMTP_PORT || 587),
+    secure: s.secure ?? process.env.SMTP_SECURE === 'true',
+    user: s.user || process.env.SMTP_USER || '',
+    pass: s.pass || process.env.SMTP_PASS || '',
+    fromName: s.fromName || process.env.SMTP_FROM_NAME || '',
+    fromEmail: s.fromEmail || process.env.SMTP_FROM || s.user || process.env.SMTP_USER || '',
+  }
+}
+
+export function setSmtp(input = {}) {
+  const current = saved.smtp || {}
+  const next = { ...current }
+  for (const key of ['host', 'user', 'fromName', 'fromEmail']) {
+    if (typeof input[key] === 'string') next[key] = input[key].trim()
+  }
+  if (input.port !== undefined) {
+    const port = Number(input.port)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Porta SMTP inválida.')
+    next.port = port
+  }
+  if (input.secure !== undefined) next.secure = Boolean(input.secure)
+  // Senha vazia mantém a atual (a tela nunca recebe a senha de volta)
+  if (typeof input.pass === 'string' && input.pass) next.pass = input.pass
+  if (next.fromEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.fromEmail)) throw new Error('E-mail do remetente inválido.')
+  saved.smtp = next
+  fs.writeFileSync(FILE, JSON.stringify(saved, null, 2), { mode: 0o600 })
+}
+
+/** Versão segura para o navegador (sem a senha). */
+export function publicSmtp() {
+  const { pass, ...rest } = getSmtp()
+  return { ...rest, hasPass: Boolean(pass), configured: Boolean(rest.host && rest.fromEmail) }
+}

@@ -22,7 +22,7 @@ function NumberField({ label, value, onChange, min = 0, max, step = 1, suffix, h
   )
 }
 
-function WindowSettings({ window: w, setWindow }) {
+export function WindowSettings({ window: w, setWindow }) {
   const toggleDay = (d) => setWindow({ ...w, days: w.days.includes(d) ? w.days.filter((x) => x !== d) : [...w.days, d].sort() })
   const invalid = w.enabled && (!w.days.length || !w.start || !w.end || w.end <= w.start)
 

@@ -112,6 +112,37 @@ As respostas só são processadas com o servidor ligado. Cliques feitos com ele 
 
 > Botões e listas não são um recurso oficial do WhatsApp para APIs não oficiais: a própria uazapi avisa que podem deixar de funcionar sem aviso, e em alguns aparelhos ou no WhatsApp Web podem não aparecer. Por isso o fluxo também aceita respostas digitadas.
 
+## Régua de cobrança
+
+Aba **Cobrança**: cada título a receber passa pelas etapas da régua, contadas a partir do vencimento (D0):
+
+| Marco | Etapa | Canais |
+|---|---|---|
+| D-7 | Envio do boleto | WhatsApp + e-mail (boleto anexado se o link for .pdf) |
+| D-3 | Lembrete preventivo | WhatsApp + e-mail |
+| D0 | Dia do vencimento | WhatsApp (com Pix e link) |
+| D+3 | Lembrete de pagamento | WhatsApp (3 variações) + e-mail |
+| D+5 | Aproximação | WhatsApp |
+| D+7 · D+15 · D+30 | Plano da dívida · Alerta de protesto · Prazo limite | ligação → ligação WhatsApp → WhatsApp + e-mail |
+| D+45 | Negociação pós-protesto | ligação → WhatsApp + e-mail |
+| D+60 | Encaminhamento jurídico | e-mail interno + WhatsApp |
+
+Todas as etapas, os textos, os canais e os marcos são editáveis em **Etapas da régua**.
+
+- **Títulos:** importe um CSV com cliente, telefone, e-mail, vencimento, valor, link do boleto, link de pagamento, Pix e status (modelo em `client/public/exemplo-titulos.csv`). Reimportar a planilha atualiza os títulos pelo número, dá baixa nos que vierem como pagos e reinicia a régua de quem teve o vencimento alterado. Colunas ausentes na planilha não apagam dados.
+- **Execução diária:** no horário configurado (padrão 09:00, horário de Brasília), cada título em aberto recebe a etapa do dia. Quem entra atrasado recebe só a etapa mais recente. Etapas que passaram há mais tempo que a tolerância (padrão 3 dias) são puladas. Há também **Executar agora**.
+- **WhatsApp:** os envios do dia formam a campanha “Régua de cobrança — dd/mm” (aba Campanhas), com o mesmo ritmo, janela de horário, pausa e relatório.
+- **E-mail:** via SMTP (Cobrança → Configurações, com botão de teste). Se o SMTP falhar, os e-mails podem ser reenviados depois.
+- **Ligações:** etapas com ligação viram tarefas na aba **Ligações**, com botões para ligar e abrir o WhatsApp. A equipe marca as tentativas e o resultado:
+  - **Promessa (com data):** suspende a régua até a data combinada e envia uma confirmação. Se a data passar sem pagamento, sai o aviso de promessa não cumprida e a régua continua.
+  - **Sem acordo / Não atendeu:** envia a mensagem e o e-mail da etapa.
+  - **Já pagou:** dá baixa no título.
+  - Sem registro até o horário limite (padrão 17:00), a mensagem e o e-mail da etapa saem sozinhos.
+- **Pagamento:** **Marcar como pago** (ou a reimportação com status pago) encerra a régua do título na hora e cancela mensagens, e-mails e ligações que ainda não saíram.
+- **Acompanhamento:** cada título mostra a linha do tempo das etapas (enviada, aguardando ligação, pulada, falha por canal) e o histórico. O botão **Exportar** gera o CSV com a situação de todos os títulos.
+
+> A régua é separada dos **Workflows** (conversas com blocos), porque depende de datas de vencimento, e-mail, ligações e baixa de pagamento.
+
 ## Agendamento
 
 - **Agendar:** no card de lançamento, escolha **Agendar** e informe data e hora. A campanha fica como **Agendada** e começa sozinha no horário marcado. O servidor precisa estar ligado nesse momento. Se estiver desligado, ela começa assim que ele voltar.

@@ -334,6 +334,105 @@ export function createCampaign({
   return c
 }
 
+// ---- Campanhas internas (régua de cobrança) ------------------------------------------------
+//
+// A régua junta os envios de WhatsApp do dia numa campanha "de sistema": cada contato tem o
+// próprio texto (`ct.template`) e uma referência (`ct.ref`) ao título. Assim os envios usam o
+// mesmo executor (ritmo, janela, pausa, relatório) das campanhas comuns.
+
+let processedHook = null
+
+/** Registra quem é avisado quando um contato de campanha interna é enviado / falha. */
+export const onContactProcessed = (fn) => (processedHook = fn)
+
+function notifyProcessed(c, ct) {
+  if (!c.source || !processedHook) return
+  try {
+    processedHook(c, ct)
+  } catch (err) {
+    console.error('Erro ao atualizar o andamento da campanha interna:', err)
+  }
+}
+
+export function createSystemCampaign({ name, settings, source, headers = [] }) {
+  const now = Date.now()
+  const c = {
+    id: crypto.randomUUID(),
+    name,
+    source,
+    createdAt: now,
+    startedAt: null,
+    finishedAt: now,
+    queuedAt: null,
+    status: 'completed',
+    lastError: null,
+    nextSendAt: null,
+    template: '',
+    media: null,
+    flow: null,
+    filters: null,
+    settings: normalizeSettings(settings),
+    phoneColumn: 'telefone',
+    countryCode: '55',
+    headers,
+    contacts: [],
+    log: [],
+  }
+  log(c, 'info', 'Campanha criada pela régua de cobrança.')
+  addCampaign(c)
+  return c
+}
+
+/**
+ * Acrescenta contatos (cada um com texto próprio) e põe a campanha para rodar.
+ * items: [{ number, raw, vars, template, ref }]
+ */
+export function appendToCampaign(c, items) {
+  let added = 0
+  for (const item of items) {
+    c.contacts.push({
+      i: c.contacts.length,
+      raw: item.raw ?? item.number ?? '',
+      number: item.number || null,
+      vars: item.vars || {},
+      template: item.template,
+      ref: item.ref || null,
+      status: item.number ? 'pending' : 'invalid',
+      error: item.number ? null : 'Telefone inválido',
+      jid: null,
+      checked: false,
+      text: null,
+      messageId: null,
+      processedAt: item.number ? null : Date.now(),
+    })
+    if (item.number) added++
+  }
+  if (added && (c.status === 'completed' || c.status === 'cancelled')) {
+    Object.assign(c, { status: 'queued', queuedAt: Date.now(), finishedAt: null, lastError: null })
+  }
+  saveCampaign(c, true)
+  if (c.status === 'queued') kick()
+  return added
+}
+
+/** Cancela envios ainda pendentes (ex.: título pago antes de a mensagem sair). */
+export function skipPendingContacts(predicate, reason) {
+  let skipped = 0
+  for (const c of listCampaigns()) {
+    if (!c.source) continue
+    let changed = false
+    for (const ct of c.contacts) {
+      if (ct.status === 'pending' && predicate(ct, c)) {
+        Object.assign(ct, { status: 'skipped', error: reason, processedAt: Date.now() })
+        changed = true
+        skipped++
+      }
+    }
+    if (changed) saveCampaign(c, true)
+  }
+  return skipped
+}
+
 export function countsOf(c) {
   const counts = { total: c.contacts.length, pending: 0, sent: 0, failed: 0, invalid: 0, skipped: 0 }
   for (const ct of c.contacts) counts[ct.status]++
@@ -344,6 +443,7 @@ export function summarize(c) {
   return {
     id: c.id,
     name: c.name,
+    source: c.source || null,
     status: c.status,
     createdAt: c.createdAt,
     startedAt: c.startedAt,
@@ -582,10 +682,12 @@ async function sendAll(c) {
     }
 
     if (shuttingDown) return
+    // O contato pode ter sido cancelado durante a espera (ex.: título pago na régua)
+    if (ct.status !== 'pending') continue
     try {
       inFlight = deliver({
         number: ct.jid || ct.number,
-        template: c.template,
+        template: ct.template ?? c.template,
         vars: ct.vars,
         media: c.media,
         settings: c.settings,
@@ -596,6 +698,7 @@ async function sendAll(c) {
       const { text, messageId } = await inFlight
       Object.assign(ct, { status: 'sent', text, messageId, error: null, processedAt: Date.now() })
       if (c.workflow) onInitialSent(c, ct)
+      notifyProcessed(c, ct)
       consecutiveFailures = 0
       log(c, 'success', `Enviado para ${ct.number}`)
     } catch (err) {
@@ -603,6 +706,7 @@ async function sendAll(c) {
       if (fatal) throw new StopCampaign(fatal) // contato continua pendente
 
       Object.assign(ct, { status: 'failed', text: err.renderedText ?? null, error: err.message, processedAt: Date.now() })
+      notifyProcessed(c, ct)
       consecutiveFailures++
       log(c, 'error', `Falha para ${ct.number}: ${err.message}`)
       if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -648,6 +752,7 @@ async function validateNumbers(c) {
       if (!r) return
       if (r.isInWhatsapp === false) {
         Object.assign(ct, { status: 'invalid', error: 'Número sem WhatsApp', processedAt: Date.now() })
+        notifyProcessed(c, ct)
         notFound++
       } else if (r.jid) {
         ct.jid = r.jid

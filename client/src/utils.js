@@ -179,6 +179,14 @@ export function toLocalInput(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+/** Data local "AAAA-MM-DD" daqui a `days` dias (para <input type="date">). */
+export function localDateKey(days = 0) {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 /** Próxima hora cheia (sugestão inicial de agendamento). */
 export const nextFullHour = () => {
   const d = new Date(Date.now() + 3600_000)

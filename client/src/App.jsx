@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { History, LogOut, Megaphone, Settings, Workflow } from 'lucide-react'
+import { History, LogOut, Megaphone, Receipt, Settings, Workflow } from 'lucide-react'
 import { api } from './api.js'
 import InstanceStatus from './components/InstanceStatus.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
@@ -7,6 +7,7 @@ import NewCampaign from './components/NewCampaign.jsx'
 import Campaigns from './components/Campaigns.jsx'
 import Login from './components/Login.jsx'
 import WorkflowsPage from './components/workflow/WorkflowsPage.jsx'
+import Cobranca from './components/cobranca/Cobranca.jsx'
 
 export default function App() {
   const [auth, setAuth] = useState(null) // { authEnabled, authenticated, user, expired? }
@@ -120,6 +121,14 @@ function Dashboard({ user, onLogout }) {
           >
             <Workflow size={16} /> Workflows
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'cobranca'}
+            className={tab === 'cobranca' ? 'active' : ''}
+            onClick={() => setTab('cobranca')}
+          >
+            <Receipt size={16} /> Cobrança
+          </button>
         </nav>
 
         <div className="topbar-right">
@@ -150,6 +159,9 @@ function Dashboard({ user, onLogout }) {
         </div>
         <div hidden={tab !== 'workflows'}>
           <WorkflowsPage openId={workflowToOpen} onOpened={clearWorkflowToOpen} onChanged={bumpWorkflows} />
+        </div>
+        <div hidden={tab !== 'cobranca'}>
+          <Cobranca active={tab === 'cobranca'} />
         </div>
       </main>
 

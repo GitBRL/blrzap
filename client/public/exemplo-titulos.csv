@@ -1,0 +1,4 @@
+numero;cliente;telefone;email;vencimento;valor;link_boleto;link_pagamento;pix;status
+1001;Maria Silva;(11) 98765-4321;maria@exemplo.com;20/10/2026;R$ 1.250,00;https://exemplo.com/boletos/1001.pdf;https://pagar.exemplo.com/1001;00020126580014BR.GOV.BCB.PIX...;em aberto
+1002;João Souza;21 99876-5432;joao@exemplo.com;05/10/2026;R$ 890,00;https://exemplo.com/boletos/1002.pdf;https://pagar.exemplo.com/1002;;em aberto
+1003;Ana Oliveira;+55 31 98888-7777;ana@exemplo.com;28/09/2026;R$ 2.400,00;;https://pagar.exemplo.com/1003;;pago

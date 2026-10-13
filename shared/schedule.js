@@ -44,7 +44,7 @@ export function zonedParts(ts, timeZone) {
 }
 
 /** Instante (ms) correspondente a uma data/hora "de parede" no fuso informado. */
-function zonedToUtc(y, m, d, h, mi, timeZone) {
+export function zonedToUtc(y, m, d, h, mi, timeZone) {
   const target = Date.UTC(y, m - 1, d, h, mi)
   let guess = target
   for (let i = 0; i < 3; i++) {
